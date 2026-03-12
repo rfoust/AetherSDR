@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "core/CommandParser.h"
 #include <QDebug>
 #include <QRegularExpression>
 
@@ -199,12 +200,14 @@ void RadioModel::handleMeterStatus(const QMap<QString, QString>& kvs)
 
 // ─── Standalone mode: create panadapter + slice ───────────────────────────────
 //
-// SmartSDR API standalone flow:
-//   1. "display panafall create"
-//      → R|0|<pan_stream_id>   (hex, e.g. "0x40000000")
-//   2. "slice create pan=<pan_stream_id> freq=<mhz> antenna=<ant> mode=<mode>"
-//      → R|0|<slice_index>     (decimal, e.g. "0")
+// SmartSDR API 1.4.0.0 standalone flow:
+//   1. "panadapter create"
+//      → R|0|pan=0x40000000         (KV response; key is "pan")
+//   2. "slice create pan=0x40000000 freq=14.225000 antenna=ANT1 mode=USB"
+//      → R|0|<slice_index>          (decimal, e.g. "0")
 //   3. Radio emits S messages for the new panadapter and slice.
+//
+// Note: "display panafall create" (v2+ syntax) returns 0x50000016 on this firmware.
 
 void RadioModel::createDefaultSlice(const QString& freqMhz,
                                      const QString& mode,
@@ -213,34 +216,47 @@ void RadioModel::createDefaultSlice(const QString& freqMhz,
     qDebug() << "RadioModel: standalone mode — creating panadapter + slice"
              << freqMhz << mode << antenna;
 
-    m_connection.sendCommand("display panafall create",
+    m_connection.sendCommand("panadapter create",
         [this, freqMhz, mode, antenna](int code, const QString& body) {
             if (code != 0) {
-                qWarning() << "RadioModel: display panafall create failed, code"
-                           << Qt::hex << code;
+                qWarning() << "RadioModel: panadapter create failed, code" << Qt::hex << code
+                           << "body:" << body;
                 return;
             }
 
-            // body is the panadapter stream ID, e.g. "0x40000000"
-            const QString panId = body.trimmed();
+            qDebug() << "RadioModel: panadapter create response body:" << body;
+
+            // Response body may be a bare hex ID ("0x40000000") or KV ("pan=0x40000000").
+            // Parse KVs first; fall back to treating the whole body as the ID.
+            QString panId;
+            const QMap<QString, QString> kvs = CommandParser::parseKVs(body);
+            if (kvs.contains("pan")) {
+                panId = kvs["pan"];
+            } else if (kvs.contains("id")) {
+                panId = kvs["id"];
+            } else {
+                panId = body.trimmed();
+            }
+
             qDebug() << "RadioModel: panadapter created, pan_id =" << panId;
 
             if (panId.isEmpty()) {
-                qWarning() << "RadioModel: display panafall create returned empty pan_id";
+                qWarning() << "RadioModel: panadapter create returned empty pan_id";
                 return;
             }
 
-            const QString sliceCmd = QString("slice create pan=%1 freq=%2 antenna=%3 mode=%4")
-                                         .arg(panId, freqMhz, antenna, mode);
+            const QString sliceCmd =
+                QString("slice create pan=%1 freq=%2 antenna=%3 mode=%4")
+                    .arg(panId, freqMhz, antenna, mode);
 
             m_connection.sendCommand(sliceCmd,
-                [](int code2, const QString& body2) {
+                [panId](int code2, const QString& body2) {
                     if (code2 != 0) {
                         qWarning() << "RadioModel: slice create failed, code"
-                                   << Qt::hex << code2;
+                                   << Qt::hex << code2 << "body:" << body2;
                     } else {
                         qDebug() << "RadioModel: slice created, index =" << body2;
-                        // Radio will now emit S messages for the new slice;
+                        // Radio now emits S|slice N ... status messages;
                         // handleSliceStatus() picks them up automatically.
                     }
                 });
