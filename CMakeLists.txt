@@ -140,15 +140,19 @@ target_link_options(AetherSDR PRIVATE
 # ── Install rules ────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
 
-install(TARGETS AetherSDR
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
-
-install(FILES AetherSDR.desktop
-    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
-)
-
-install(FILES docs/logo-circle.png
-    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
-    RENAME aethersdr.png
-)
+if(APPLE)
+    install(TARGETS AetherSDR
+        BUNDLE DESTINATION .
+    )
+else()
+    install(TARGETS AetherSDR
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+    install(FILES AetherSDR.desktop
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
+    )
+    install(FILES docs/logo-circle.png
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
+        RENAME aethersdr.png
+    )
+endif()
