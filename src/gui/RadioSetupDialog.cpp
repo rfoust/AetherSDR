@@ -40,7 +40,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
 {
     setWindowTitle("Radio Setup");
-    setMinimumSize(580, 400);
+    setMinimumSize(660, 400);
     setStyleSheet("QDialog { background: #0f0f1a; }");
 
     auto* layout = new QVBoxLayout(this);
