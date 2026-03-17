@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QAudioSink>
 #include <QAudioSource>
+#include <QAudioDevice>
 #include <QAudioFormat>
 #include <QIODevice>
 #include <QUdpSocket>
@@ -50,6 +51,12 @@ public:
     bool isMuted() const   { return m_muted; }
     void setMuted(bool m);
 
+    // Device selection (restarts the stream if currently running)
+    void setOutputDevice(const QAudioDevice& dev);
+    void setInputDevice(const QAudioDevice& dev);
+    QAudioDevice outputDevice() const { return m_outputDevice; }
+    QAudioDevice inputDevice()  const { return m_inputDevice; }
+
 public slots:
     // Receives stripped PCM from PanadapterStream::audioDataReady().
     void feedAudioData(const QByteArray& pcm);
@@ -81,6 +88,8 @@ private:
     quint8        m_txPacketCount{0};    // 4-bit, mod 16
     QByteArray    m_txAccumulator;       // accumulate PCM until 128 stereo pairs
 
+    QAudioDevice m_outputDevice;
+    QAudioDevice m_inputDevice;
     float m_rxVolume{1.0f};
     bool  m_muted{false};
 

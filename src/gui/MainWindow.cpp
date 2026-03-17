@@ -526,7 +526,7 @@ void MainWindow::buildMenuBar()
 
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
     connect(radioSetup, &QAction::triggered, this, [this] {
-        auto* dlg = new RadioSetupDialog(&m_radioModel, this);
+        auto* dlg = new RadioSetupDialog(&m_radioModel, &m_audio, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->show();
     });

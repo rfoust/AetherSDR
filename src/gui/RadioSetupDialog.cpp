@@ -1,6 +1,7 @@
 #include "RadioSetupDialog.h"
 #include "ComboStyle.h"
 #include "models/RadioModel.h"
+#include "core/AudioEngine.h"
 
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -36,8 +37,8 @@ static const QString kEditStyle =
     "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
     "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
 
-RadioSetupDialog::RadioSetupDialog(RadioModel* model, QWidget* parent)
-    : QDialog(parent), m_model(model)
+RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio, QWidget* parent)
+    : QDialog(parent), m_model(model), m_audio(audio)
 {
     setWindowTitle("Radio Setup");
     setMinimumSize(660, 400);
@@ -1170,12 +1171,28 @@ QWidget* RadioSetupDialog::buildAudioTab()
     const auto outDevices = QMediaDevices::audioOutputs();
     for (const auto& dev : outDevices)
         outCombo->addItem(dev.description(), dev.id());
-    const auto defaultOut = QMediaDevices::defaultAudioOutput();
-    int outIdx = outCombo->findData(defaultOut.id());
+    // Select current device (or system default)
+    const auto curOut = m_audio ? m_audio->outputDevice() : QAudioDevice();
+    const auto selOut = curOut.isNull() ? QMediaDevices::defaultAudioOutput() : curOut;
+    int outIdx = outCombo->findData(selOut.id());
     if (outIdx >= 0) outCombo->setCurrentIndex(outIdx);
     outRow->addWidget(outLabel);
     outRow->addWidget(outCombo, 1);
     pcLayout->addLayout(outRow);
+
+    // Wire device changes to AudioEngine
+    if (m_audio) {
+        connect(inCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, inCombo, inDevices](int idx) {
+            if (idx >= 0 && idx < inDevices.size())
+                m_audio->setInputDevice(inDevices[idx]);
+        });
+        connect(outCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, outCombo, outDevices](int idx) {
+            if (idx >= 0 && idx < outDevices.size())
+                m_audio->setOutputDevice(outDevices[idx]);
+        });
+    }
 
     vbox->addWidget(pcGroup);
     vbox->addStretch(1);

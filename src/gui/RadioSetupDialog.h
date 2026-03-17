@@ -9,6 +9,7 @@ class QLineEdit;
 namespace AetherSDR {
 
 class RadioModel;
+class AudioEngine;
 
 // Radio Setup dialog — tabbed configuration window matching SmartSDR's
 // Settings → Radio Setup. Shows radio info, GPS, TX, RX, filters, etc.
@@ -16,7 +17,8 @@ class RadioSetupDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit RadioSetupDialog(RadioModel* model, QWidget* parent = nullptr);
+    explicit RadioSetupDialog(RadioModel* model, AudioEngine* audio = nullptr,
+                              QWidget* parent = nullptr);
 
 private:
     QWidget* buildRadioTab();
@@ -29,7 +31,8 @@ private:
     QWidget* buildFiltersTab();
     QWidget* buildXvtrTab();
 
-    RadioModel* m_model;
+    RadioModel*  m_model;
+    AudioEngine* m_audio{nullptr};
 
     // Radio tab fields
     QLabel* m_serialLabel{nullptr};

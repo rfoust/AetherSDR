@@ -35,12 +35,13 @@ bool AudioEngine::startRxStream()
     if (m_audioSink) return true;   // already running
 
     const QAudioFormat fmt = makeFormat();
-    const QAudioDevice defaultOutput = QMediaDevices::defaultAudioOutput();
+    const QAudioDevice dev = m_outputDevice.isNull()
+        ? QMediaDevices::defaultAudioOutput() : m_outputDevice;
 
-    if (!defaultOutput.isFormatSupported(fmt))
-        qWarning() << "AudioEngine: default output does not support 24kHz stereo Int16";
+    if (!dev.isFormatSupported(fmt))
+        qWarning() << "AudioEngine: output device does not support 24kHz stereo Int16";
 
-    m_audioSink   = new QAudioSink(defaultOutput, fmt, this);
+    m_audioSink   = new QAudioSink(dev, fmt, this);
     m_audioSink->setVolume(m_rxVolume);
     m_audioDevice = m_audioSink->start();   // push-mode
 
@@ -115,14 +116,15 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_txAccumulator.clear();
 
     const QAudioFormat fmt = makeFormat();
-    const QAudioDevice defaultInput = QMediaDevices::defaultAudioInput();
+    const QAudioDevice dev = m_inputDevice.isNull()
+        ? QMediaDevices::defaultAudioInput() : m_inputDevice;
 
-    if (defaultInput.isNull()) {
+    if (dev.isNull()) {
         qWarning() << "AudioEngine: no audio input device available";
         return false;
     }
 
-    m_audioSource = new QAudioSource(defaultInput, fmt, this);
+    m_audioSource = new QAudioSource(dev, fmt, this);
     m_micDevice   = m_audioSource->start();
 
     if (!m_micDevice) {
@@ -235,6 +237,30 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     m_txPacketCount = (m_txPacketCount + 1) & 0xF;
 
     return packet;
+}
+
+void AudioEngine::setOutputDevice(const QAudioDevice& dev)
+{
+    m_outputDevice = dev;
+    qDebug() << "AudioEngine: output device set to" << dev.description();
+    // Restart RX stream if running
+    if (m_audioSink) {
+        stopRxStream();
+        startRxStream();
+    }
+}
+
+void AudioEngine::setInputDevice(const QAudioDevice& dev)
+{
+    m_inputDevice = dev;
+    qDebug() << "AudioEngine: input device set to" << dev.description();
+    // Restart TX stream if running
+    if (m_audioSource) {
+        QHostAddress addr = m_txAddress;
+        quint16 port = m_txPort;
+        stopTxStream();
+        startTxStream(addr, port);
+    }
 }
 
 } // namespace AetherSDR
