@@ -48,6 +48,7 @@ private:
     void buildUI();
     void buildTabContent();
     void syncFromSlice();
+    void updateTxBadgeStyle(bool isTx);
     void showTab(int index);
     void updateFreqLabel();
     void updateFilterLabel();

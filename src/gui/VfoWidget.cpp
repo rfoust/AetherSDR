@@ -202,11 +202,11 @@ void VfoWidget::buildUI()
 
     m_txBadge = new QPushButton("TX");
     m_txBadge->setFixedSize(28, 20);
-    m_txBadge->setStyleSheet(
-        "QPushButton { background: #cc0000; color: #ffffff; border: none; "
-        "border-radius: 2px; font-size: 12px; font-weight: bold; padding: 0; }"
-        "QPushButton:hover { background: #ff2222; }");
-    m_txBadge->hide();
+    updateTxBadgeStyle(false);
+    connect(m_txBadge, &QPushButton::clicked, this, [this] {
+        if (m_slice && !m_slice->isTxSlice())
+            m_slice->setTxSlice(true);
+    });
     hdr->addWidget(m_txBadge);
 
     m_sliceBadge = new QLabel("A");
@@ -1242,9 +1242,9 @@ void VfoWidget::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
         m_updatingFromModel = true; m_txAntBtn->setText(ant); m_updatingFromModel = false;
     });
-    // TX slice
+    // TX slice — toggle between red (active TX) and grey (clickable to set TX)
     connect(m_slice, &SliceModel::txSliceChanged, this, [this](bool tx) {
-        m_txBadge->setVisible(tx);
+        updateTxBadgeStyle(tx);
     });
     // Audio
     connect(m_slice, &SliceModel::audioGainChanged, this, [this](float g) {
@@ -1384,6 +1384,21 @@ void VfoWidget::setSlice(SliceModel* slice)
     syncFromSlice();
 }
 
+void VfoWidget::updateTxBadgeStyle(bool isTx)
+{
+    if (isTx) {
+        m_txBadge->setStyleSheet(
+            "QPushButton { background: #cc0000; color: #ffffff; border: none; "
+            "border-radius: 2px; font-size: 12px; font-weight: bold; padding: 0; }"
+            "QPushButton:hover { background: #ff2222; }");
+    } else {
+        m_txBadge->setStyleSheet(
+            "QPushButton { background: #404040; color: #808080; border: none; "
+            "border-radius: 2px; font-size: 12px; font-weight: bold; padding: 0; }"
+            "QPushButton:hover { background: #606060; color: #c0c0c0; }");
+    }
+}
+
 void VfoWidget::syncFromSlice()
 {
     if (!m_slice) return;
@@ -1391,7 +1406,7 @@ void VfoWidget::syncFromSlice()
 
     m_rxAntBtn->setText(m_slice->rxAntenna());
     m_txAntBtn->setText(m_slice->txAntenna());
-    m_txBadge->setVisible(m_slice->isTxSlice());
+    updateTxBadgeStyle(m_slice->isTxSlice());
     {
         QSignalBlocker b(m_lockVfoBtn);
         m_lockVfoBtn->setChecked(m_slice->isLocked());
