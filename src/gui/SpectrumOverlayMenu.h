@@ -3,6 +3,8 @@
 #include <QWidget>
 #include <QVector>
 #include <QStringList>
+#include <QWheelEvent>
+#include <QMouseEvent>
 
 class QPushButton;
 class QComboBox;
@@ -36,6 +38,9 @@ public:
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override { event->accept(); }
+    void mousePressEvent(QMouseEvent* event) override { event->accept(); }
+    void mouseReleaseEvent(QMouseEvent* event) override { event->accept(); }
 
 signals:
     void addRxClicked();

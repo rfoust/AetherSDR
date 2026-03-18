@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QWidget>
+#include <QWheelEvent>
+#include <QMouseEvent>
 #include <QVector>
 #include <QStringList>
 
@@ -43,6 +45,8 @@ Q_SIGNALS:
 protected:
     void paintEvent(QPaintEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
+    void wheelEvent(QWheelEvent*) override { /* consume — don't tune VFO */ }
+    void mousePressEvent(QMouseEvent* ev) override { ev->accept(); }
 
 private:
     void buildUI();
