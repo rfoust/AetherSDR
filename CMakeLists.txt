@@ -146,15 +146,30 @@ set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
 )
 # x86 RTCD (runtime CPU detection) + per-file SIMD flags
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
-    set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
-        COMPILE_FLAGS "-w -DRNN_ENABLE_X86_RTCD=1 -DCPU_INFO_BY_C=1"
-    )
-    set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_sse4_1.c PROPERTIES
-        COMPILE_FLAGS "-w -DRNN_ENABLE_X86_RTCD=1 -DCPU_INFO_BY_C=1 -msse4.1"
-    )
-    set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_avx2.c PROPERTIES
-        COMPILE_FLAGS "-w -DRNN_ENABLE_X86_RTCD=1 -DCPU_INFO_BY_C=1 -mavx -mfma -mavx2"
-    )
+    if(MSVC)
+        # MSVC: uses _MSC_VER path in x86cpu.c (intrin.h), no CPU_INFO_BY_C needed
+        # MSVC doesn't need -msse4.1/-mavx flags — intrinsics are always available
+        set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
+            COMPILE_FLAGS "/w /DRNN_ENABLE_X86_RTCD=1"
+        )
+        set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_sse4_1.c PROPERTIES
+            COMPILE_FLAGS "/w /DRNN_ENABLE_X86_RTCD=1 /D__SSE4_1__"
+        )
+        set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_avx2.c PROPERTIES
+            COMPILE_FLAGS "/w /DRNN_ENABLE_X86_RTCD=1 /arch:AVX2 /D__AVX2__"
+        )
+    else()
+        # GCC/Clang: use cpuid.h intrinsic and per-file ISA flags
+        set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
+            COMPILE_FLAGS "-w -DRNN_ENABLE_X86_RTCD=1 -DCPU_INFO_BY_C=1"
+        )
+        set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_sse4_1.c PROPERTIES
+            COMPILE_FLAGS "-w -DRNN_ENABLE_X86_RTCD=1 -DCPU_INFO_BY_C=1 -msse4.1"
+        )
+        set_source_files_properties(${RNNOISE_DIR}/src/x86/nnet_avx2.c PROPERTIES
+            COMPILE_FLAGS "-w -DRNN_ENABLE_X86_RTCD=1 -DCPU_INFO_BY_C=1 -mavx -mfma -mavx2"
+        )
+    endif()
 else()
     set_source_files_properties(${RNNOISE_SOURCES} PROPERTIES
         COMPILE_FLAGS "-w"
