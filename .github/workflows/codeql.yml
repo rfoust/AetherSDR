@@ -25,7 +25,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config \
-            qt6-base-dev qt6-multimedia-dev libgl1-mesa-dev
+            qt6-base-dev qt6-multimedia-dev libgl1-mesa-dev \
+            autoconf automake libtool
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -35,6 +36,7 @@ jobs:
       - name: Build
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build --target build_opus -j$(nproc)
           cmake --build build -j$(nproc)
 
       - name: Perform CodeQL Analysis
