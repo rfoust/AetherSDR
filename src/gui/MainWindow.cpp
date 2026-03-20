@@ -902,6 +902,14 @@ void MainWindow::buildMenuBar()
         connect(dlg, &QDialog::finished, this, [this]() {
             bool centered = AppSettings::instance().value("CwMarkerCentered", "True").toString() == "True";
             spectrum()->setCwMarkerCentered(centered);
+
+            // Re-evaluate CW decode overlay visibility
+            bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
+            auto* s = activeSlice();
+            if (s) {
+                bool isCw = (s->mode() == "CW" || s->mode() == "CWL");
+                m_panApplet->setCwPanelVisible(isCw && decodeOn);
+            }
         });
         dlg->show();
     });
@@ -1366,7 +1374,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // Show/hide CW decode panel and start/stop decoder
         if (s->sliceId() == m_activeSliceId) {
             bool isCw = (mode == "CW" || mode == "CWL");
-            m_panApplet->setCwPanelVisible(isCw);
+            bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
+            m_panApplet->setCwPanelVisible(isCw && decodeOn);
             if (isCw && !m_cwDecoder.isRunning())
                 m_cwDecoder.start();
             else if (!isCw && m_cwDecoder.isRunning())
@@ -1435,7 +1444,8 @@ void MainWindow::setActiveSlice(int sliceId)
 
     // Show/hide CW decode panel for the active slice's current mode
     bool isCw = (s->mode() == "CW" || s->mode() == "CWL");
-    m_panApplet->setCwPanelVisible(isCw);
+    bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
+    m_panApplet->setCwPanelVisible(isCw && decodeOn);
     if (isCw && !m_cwDecoder.isRunning())
         m_cwDecoder.start();
     else if (!isCw && m_cwDecoder.isRunning())

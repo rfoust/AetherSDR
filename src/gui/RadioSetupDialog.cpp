@@ -1070,6 +1070,19 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         });
         grid->addWidget(syncBtn, 1, 5);
 
+        // CW Decode overlay toggle
+        auto* decodeLbl = new QLabel("Decode:");
+        decodeLbl->setStyleSheet(kLabelStyle);
+        grid->addWidget(decodeLbl, 2, 4);
+        bool decodeOn = AppSettings::instance().value("CwDecodeOverlay", "True").toString() == "True";
+        auto* decodeBtn = mkTogBtn("On", decodeOn);
+        connect(decodeBtn, &QPushButton::toggled, this, [](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("CwDecodeOverlay", on ? "True" : "False");
+            s.save();
+        });
+        grid->addWidget(decodeBtn, 2, 5);
+
         // Passband Marker: Centered / Carrier
         auto* markerLbl = new QLabel("Marker:");
         markerLbl->setStyleSheet(kLabelStyle);
