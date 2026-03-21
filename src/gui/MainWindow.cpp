@@ -850,7 +850,7 @@ MainWindow::MainWindow(QWidget* parent)
                          const QString& utcTime) {
         const bool gpsPresent = (status != "Not Present" && status != "");
         m_gpsLabel->setText(gpsPresent
-            ? QString("GPS %1/%2").arg(tracked).arg(visible)
+            ? QString("GPS: %1/%2").arg(tracked).arg(visible)
             : "GPS: N/A");
         m_gpsStatusLabel->setText(gpsPresent
             ? QString("[%1]").arg(status)
