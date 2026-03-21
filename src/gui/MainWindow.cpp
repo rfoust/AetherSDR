@@ -824,10 +824,11 @@ MainWindow::MainWindow(QWidget* parent)
         if (quality == "Fair") color = "#cc9900";
         else if (quality == "Poor") color = "#cc3333";
         else if (quality == "Good") color = "#00b4d8";
-        Q_UNUSED(pingMs);
         m_networkLabel->setText(QString("Network: [<span style='color:%1'>%2</span>]")
             .arg(color, quality));
         m_networkLabel->setTextFormat(Qt::RichText);
+        m_networkLabel->setToolTip(QString("Network: %1\nLatency (RTT): %2")
+            .arg(quality, pingMs < 1 ? "< 1 ms" : QString("%1 ms").arg(pingMs)));
     });
 
     connect(m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
@@ -933,6 +934,16 @@ void MainWindow::closeEvent(QCloseEvent* event)
     m_radioModel.disconnectFromRadio();
     m_audio.stopRxStream();
     QMainWindow::closeEvent(event);
+}
+
+bool MainWindow::eventFilter(QObject* obj, QEvent* event)
+{
+    if (obj == m_networkLabel && event->type() == QEvent::MouseButtonDblClick) {
+        NetworkDiagnosticsDialog dlg(&m_radioModel, this);
+        dlg.exec();
+        return true;
+    }
+    return QMainWindow::eventFilter(obj, event);
 }
 
 // ─── UI Construction ──────────────────────────────────────────────────────────
@@ -1242,6 +1253,8 @@ void MainWindow::buildUI()
     m_networkLabel = new QLabel("", this);
     m_networkLabel->setStyleSheet(valStyle);
     m_networkLabel->setTextFormat(Qt::RichText);
+    m_networkLabel->setCursor(Qt::PointingHandCursor);
+    m_networkLabel->installEventFilter(this);
     statusBar()->addWidget(m_networkLabel);
 
     addSep();
