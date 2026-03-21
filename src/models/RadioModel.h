@@ -163,9 +163,9 @@ public:
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;
 
-    // SmartConnect mode: mirror existing client's slices instead of creating own
-    void setSmartConnect(bool on) { m_smartConnect = on; }
-    bool isSmartConnect() const { return m_smartConnect; }
+    // SmartControl mode: mirror existing client's slices instead of creating own
+    void setSmartControl(bool on) { m_smartControl = on; }
+    bool isSmartControl() const { return m_smartControl; }
 
     // High-level actions
     void connectToRadio(const RadioInfo& info);
@@ -404,7 +404,7 @@ private:
 
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
-    bool      m_smartConnect{false};
+    bool      m_smartControl{false};
     QTimer    m_reconnectTimer;
 
     // ── Network quality monitor (matches FlexLib MonitorNetworkQuality) ──

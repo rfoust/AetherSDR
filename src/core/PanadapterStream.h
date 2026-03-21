@@ -61,6 +61,9 @@ public:
     // panStreamId is the panadapter hex ID (e.g. 0x40000000).
     void setOwnedStreamIds(quint32 panStreamId, quint32 wfStreamId);
 
+    // SmartControl: accept all VITA-49 streams regardless of ownership
+    void setAcceptAllStreams(bool on) { m_acceptAllStreams = on; }
+
     // DAX stream routing
     void registerDaxStream(quint32 streamId, int channel);
     void unregisterDaxStream(quint32 streamId);
@@ -157,6 +160,7 @@ private:
 
     quint32         m_ownedPanStreamId{0};
     quint32         m_ownedWfStreamId{0};
+    bool            m_acceptAllStreams{false};
     QUdpSocket      m_socket;
     quint16         m_localPort{0};
     float           m_minDbm{-130.0f};
