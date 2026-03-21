@@ -1229,9 +1229,21 @@ void MainWindow::buildUI()
 
     addSep();
 
+    // Radio model (top) + version (bottom) stacked
     m_radioInfoLabel = new QLabel("");
-    m_radioInfoLabel->setStyleSheet(valStyle);
-    hbox->addWidget(m_radioInfoLabel);
+    auto* radioStack = new QWidget;
+    auto* radioVbox = new QVBoxLayout(radioStack);
+    radioVbox->setContentsMargins(0, 0, 0, 0);
+    radioVbox->setSpacing(0);
+    m_radioInfoLabel = new QLabel("");
+    m_radioInfoLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 12px; }");
+    m_radioInfoLabel->setAlignment(Qt::AlignCenter);
+    m_radioVersionLabel = new QLabel("");
+    m_radioVersionLabel->setStyleSheet("QLabel { color: #607080; font-size: 12px; }");
+    m_radioVersionLabel->setAlignment(Qt::AlignCenter);
+    radioVbox->addWidget(m_radioInfoLabel);
+    radioVbox->addWidget(m_radioVersionLabel);
+    hbox->addWidget(radioStack);
 
     // ── Center stretch → STATION → stretch ───────────────────────────────
     hbox->addStretch(1);
@@ -1363,8 +1375,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
 {
     m_connPanel->setConnected(connected);
     if (connected) {
-        m_radioInfoLabel->setText(QString("%1  %2")
-            .arg(m_radioModel.model(), m_radioModel.version()));
+        m_radioInfoLabel->setText(m_radioModel.model());
+        m_radioVersionLabel->setText(m_radioModel.version());
         m_stationLabel->setText(QString("STATION: %1").arg(m_radioModel.nickname()));
         m_connStatusLabel->setText("Connected");
         m_connPanel->setStatusText("Connected");
@@ -1433,6 +1445,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
     } else {
         m_connStatusLabel->setText("Disconnected");
         m_radioInfoLabel->setText("");
+        m_radioVersionLabel->setText("");
         m_stationLabel->setText("");
         m_tnfIndicator->setStyleSheet("QLabel { color: #404858; font-weight: bold; }");
         m_tunIndicator->setStyleSheet("QLabel { color: #404858; font-weight: bold; }");
