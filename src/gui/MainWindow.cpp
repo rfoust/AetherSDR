@@ -763,7 +763,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         return true;
     }
     if (obj == m_addPanLabel && event->type() == QEvent::MouseButtonPress) {
-        m_radioModel.createPanadapter();
+        // Multi-pan disabled pending stabilization (#152)
+        // m_radioModel.createPanadapter();
         return true;
     }
     return QMainWindow::eventFilter(obj, event);
