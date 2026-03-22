@@ -1908,6 +1908,18 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             setActiveSlice(id);
     });
 
+    // SWAP — swap RX and TX frequencies (keep TX/RX assignments)
+    connect(w, &VfoWidget::swapRequested, this, [this]() {
+        if (!m_splitActive || m_splitRxSliceId < 0 || m_splitTxSliceId < 0) return;
+        auto* rx = m_radioModel.slice(m_splitRxSliceId);
+        auto* tx = m_radioModel.slice(m_splitTxSliceId);
+        if (!rx || !tx) return;
+        double rxFreq = rx->frequency();
+        double txFreq = tx->frequency();
+        rx->setFrequency(txFreq);
+        tx->setFrequency(rxFreq);
+    });
+
     // Split toggle — per-widget, slice-aware
     connect(w, &VfoWidget::splitToggled, this, [this, sliceId]() {
         if (!m_splitActive) {

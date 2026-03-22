@@ -227,7 +227,10 @@ void VfoWidget::buildUI()
         "QPushButton:hover { color: rgba(255,255,255,80); }");
     m_splitBadge->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     connect(m_splitBadge, &QPushButton::clicked, this, [this]() {
-        emit splitToggled();
+        if (m_splitBadge->text() == "SWAP")
+            emit swapRequested();
+        else
+            emit splitToggled();
     });
     hdr->addWidget(m_splitBadge);
 
@@ -1630,8 +1633,14 @@ void VfoWidget::updateTxBadgeStyle(bool isTx)
 void VfoWidget::updateSplitBadge(bool isTxSlice, bool isRxSplit)
 {
     if (isTxSlice) {
-        // TX slice in split pair — hide SPLIT badge entirely
-        m_splitBadge->hide();
+        // TX slice in split pair — show SWAP button
+        m_splitBadge->show();
+        m_splitBadge->setText("SWAP");
+        m_splitBadge->setStyleSheet(
+            "QPushButton { background: #204060; color: #80c0ff; border: none; "
+            "border-radius: 2px; font-size: 11px; font-weight: bold; "
+            "padding: 0px 3px; }"
+            "QPushButton:hover { background: #306080; color: #ffffff; }");
     } else if (isRxSplit) {
         // RX slice that initiated split — red badge, full opacity
         m_splitBadge->show();

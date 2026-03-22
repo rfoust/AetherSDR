@@ -71,6 +71,7 @@ Q_SIGNALS:
     void radeActivated(bool on, int sliceId);
 #endif
     void splitToggled();
+    void swapRequested();
     void autotuneRequested(bool intermittent);  // CW auto-tune: false=once, true=loop
     void sliceActivationRequested(int sliceId);
 
