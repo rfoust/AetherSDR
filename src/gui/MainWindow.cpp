@@ -2181,14 +2181,15 @@ void MainWindow::activateRADE(int sliceId)
     }
 
     // RADE status indicator in VFO widget
-    auto* vfo = spectrum()->vfoWidget();
-    vfo->setRadeActive(true);
-    connect(m_radeEngine, &RADEEngine::syncChanged,
-            vfo, &VfoWidget::setRadeSynced);
-    connect(m_radeEngine, &RADEEngine::snrChanged,
-            vfo, &VfoWidget::setRadeSnr);
-    connect(m_radeEngine, &RADEEngine::freqOffsetChanged,
-            vfo, &VfoWidget::setRadeFreqOffset);
+    if (auto* vfo = spectrum()->vfoWidget()) {
+        vfo->setRadeActive(true);
+        connect(m_radeEngine, &RADEEngine::syncChanged,
+                vfo, &VfoWidget::setRadeSynced);
+        connect(m_radeEngine, &RADEEngine::snrChanged,
+                vfo, &VfoWidget::setRadeSnr);
+        connect(m_radeEngine, &RADEEngine::freqOffsetChanged,
+                vfo, &VfoWidget::setRadeFreqOffset);
+    }
 
     qInfo() << "MainWindow: RADE mode activated on slice" << sliceId;
 }
@@ -2202,7 +2203,8 @@ void MainWindow::deactivateRADE()
         m_radeSliceId = -1;
     }
 
-    spectrum()->vfoWidget()->setRadeActive(false);
+    if (auto* vfo = spectrum()->vfoWidget())
+        vfo->setRadeActive(false);
 
     m_audio.setRadeMode(false);
     m_audio.clearTxAccumulators();  // flush stale RADE modem data
