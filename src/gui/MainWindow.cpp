@@ -638,6 +638,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_radioModel.meterModel(), &MeterModel::txMetersChanged,
             m_appletPanel->txApplet(), &TxApplet::updateMeters);
     m_appletPanel->txApplet()->setTransmitModel(m_radioModel.transmitModel());
+    m_appletPanel->txApplet()->setTunerModel(m_radioModel.tunerModel());
     m_appletPanel->rxApplet()->setTransmitModel(m_radioModel.transmitModel());
 
     // Hide APD row on radios that don't support it

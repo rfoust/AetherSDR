@@ -10,6 +10,7 @@ class QComboBox;
 namespace AetherSDR {
 
 class TransmitModel;
+class TunerModel;
 
 // TX applet — transmit controls matching the SmartSDR TX panel.
 //
@@ -30,6 +31,7 @@ public:
     explicit TxApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
+    void setTunerModel(TunerModel* tuner);
 
 public slots:
     void updateMeters(float fwdPower, float swr);

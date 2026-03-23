@@ -2,6 +2,7 @@
 #include "ComboStyle.h"
 #include "HGauge.h"
 #include "models/TransmitModel.h"
+#include "models/TunerModel.h"
 
 #include <QPushButton>
 #include <QLabel>
@@ -372,6 +373,26 @@ void TxApplet::setTransmitModel(TransmitModel* model)
 
     syncFromModel();
     syncAtuIndicators();
+}
+
+void TxApplet::setTunerModel(TunerModel* tuner)
+{
+    if (!tuner) return;
+
+    auto updateButtons = [this, tuner]() {
+        bool tgxlOperate = tuner->isPresent() && tuner->isOperate();
+        m_tuneBtn->setEnabled(!tgxlOperate);
+        m_atuBtn->setEnabled(!tgxlOperate);
+        m_memBtn->setEnabled(!tgxlOperate);
+        QString tip = tgxlOperate ? "Disabled — TGXL is in OPERATE mode" : "";
+        m_tuneBtn->setToolTip(tip);
+        m_atuBtn->setToolTip(tip);
+        m_memBtn->setToolTip(tip);
+    };
+
+    connect(tuner, &TunerModel::stateChanged, this, updateButtons);
+    connect(tuner, &TunerModel::presenceChanged, this, updateButtons);
+    updateButtons();
 }
 
 void TxApplet::syncFromModel()
