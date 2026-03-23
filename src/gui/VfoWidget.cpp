@@ -113,8 +113,8 @@ static const QString kTabLblActive =
     "color: #00b4d8; font-size: 13px; font-weight: bold; padding: 3px 0; }";
 
 static const QString kDisabledBtn =
-    "QPushButton:disabled { background-color: #0a0a14; color: #404050; "
-    "border: 1px solid #1a1a2a; }";
+    "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
+    "border: 1px solid #2a3040; }";
 
 static const QString kDspToggle =
     "QPushButton { background: #1a2a3a; border: 1px solid #304050; border-radius: 2px; "

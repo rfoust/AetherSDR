@@ -134,8 +134,8 @@ static const QString kGreenActive =
     "border: 1px solid #00a060; }";
 
 static const QString kDisabledBtn =
-    "QPushButton:disabled { background-color: #0a0a14; color: #404050; "
-    "border: 1px solid #1a1a2a; }";
+    "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
+    "border: 1px solid #2a3040; }";
 
 static const QString kAmberActive =
     "QPushButton:checked { background-color: #604000; color: #ffb800; "
