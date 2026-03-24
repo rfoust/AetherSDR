@@ -1221,6 +1221,10 @@ void RadioModel::onStatusReceived(const QString& object,
                 m_panadapters[panId] = pan;
                 if (m_activePanId.isEmpty())
                     m_activePanId = panId;
+                // Re-register stream IDs when waterfall ID arrives (it's not
+                // available at pan creation time — comes later in display pan status)
+                connect(pan, &PanadapterModel::waterfallIdChanged,
+                        this, &RadioModel::updateStreamFilters);
                 updateStreamFilters();
                 qCDebug(lcProtocol) << "RadioModel: claimed panadapter" << panId;
                 emit panadapterAdded(pan);
