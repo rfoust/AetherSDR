@@ -142,8 +142,8 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     for (auto* a : applets)
         a->setParent(nullptr);
 
-    // Delete old splitter and create fresh one
-    delete m_splitter;
+    // Delete old splitter safely (may be in middle of event delivery)
+    m_splitter->deleteLater();
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->setHandleWidth(3);
     m_splitter->setChildrenCollapsible(false);
