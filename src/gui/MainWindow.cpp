@@ -346,8 +346,8 @@ MainWindow::MainWindow(QWidget* parent)
             }
         }
     });
-    connect(&m_radioModel, &RadioModel::panadapterInfoChanged,
-            spectrum(), &SpectrumWidget::setFrequencyRange);
+    // Legacy panadapterInfoChanged — only used for initial display settings push.
+    // Per-pan frequency/level tracking is done via PanadapterModel signals in panadapterAdded.
     connect(&m_radioModel, &RadioModel::panadapterInfoChanged,
             this, [this]() {
         if (!m_displaySettingsPushed) {
@@ -442,54 +442,7 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Per-panadapter signal wiring (extracted for multi-pan support) ──────
     wirePanadapter(m_panApplet);
 
-    // ── Display sub-panel → SpectrumWidget (client-side for now) ─────────
-    auto* overlay = spectrum()->overlayMenu();
-    connect(overlay, &SpectrumOverlayMenu::fftFillAlphaChanged,
-            spectrum(), &SpectrumWidget::setFftFillAlpha);
-    connect(overlay, &SpectrumOverlayMenu::fftFillColorChanged,
-            spectrum(), &SpectrumWidget::setFftFillColor);
-    // FFT controls → SpectrumWidget (local) + RadioModel (radio command)
-    connect(overlay, &SpectrumOverlayMenu::fftAverageChanged,
-            this, [this](int v) {
-        spectrum()->setFftAverage(v);
-        m_radioModel.setPanAverage(v);
-    });
-    connect(overlay, &SpectrumOverlayMenu::fftFpsChanged,
-            this, [this](int v) {
-        spectrum()->setFftFps(v);
-        m_radioModel.setPanFps(v);
-    });
-    connect(overlay, &SpectrumOverlayMenu::fftWeightedAverageChanged,
-            this, [this](bool on) {
-        spectrum()->setFftWeightedAvg(on);
-        m_radioModel.setPanWeightedAverage(on);
-    });
-    // Waterfall controls → SpectrumWidget (local) + RadioModel (radio command)
-    connect(overlay, &SpectrumOverlayMenu::wfColorGainChanged,
-            this, [this](int v) {
-        spectrum()->setWfColorGain(v);
-        m_radioModel.setWaterfallColorGain(v);
-    });
-    connect(overlay, &SpectrumOverlayMenu::wfBlackLevelChanged,
-            this, [this](int v) {
-        spectrum()->setWfBlackLevel(v);
-        m_radioModel.setWaterfallBlackLevel(v);
-    });
-    connect(overlay, &SpectrumOverlayMenu::wfAutoBlackChanged,
-            this, [this](bool on) {
-        spectrum()->setWfAutoBlack(on);
-        m_radioModel.setWaterfallAutoBlack(on);
-    });
-    connect(overlay, &SpectrumOverlayMenu::wfLineDurationChanged,
-            this, [this](int ms) {
-        spectrum()->setWfLineDuration(ms);
-        m_radioModel.setWaterfallLineDuration(ms);
-    });
-    // Noise floor auto-adjust (client-side, adjusts min_dbm)
-    connect(overlay, &SpectrumOverlayMenu::noiseFloorPositionChanged,
-            spectrum(), &SpectrumWidget::setNoiseFloorPosition);
-    connect(overlay, &SpectrumOverlayMenu::noiseFloorEnableChanged,
-            spectrum(), &SpectrumWidget::setNoiseFloorEnable);
+    // Display overlay connections are now per-pan in wirePanadapter().
 
     // ── Panadapter stream → audio engine ──────────────────────────────────
     // All VITA-49 traffic arrives on the single client udpport socket owned
@@ -596,7 +549,7 @@ MainWindow::MainWindow(QWidget* parent)
         s.save();
     });
     int savedStep = AppSettings::instance().value("TuningStepSize", "100").toInt();
-    spectrum()->setStepSize(savedStep);
+    for (auto* a : m_panStack->allApplets()) a->spectrumWidget()->setStepSize(savedStep);
     m_appletPanel->rxApplet()->setInitialStepSize(savedStep);
 
     // ── Antenna list from radio → applet panel ─────────────────────────────
@@ -1249,7 +1202,7 @@ void MainWindow::buildMenuBar()
     bandPlanAct->setChecked(
         AppSettings::instance().value("ShowBandPlan", "True").toString() == "True");
     connect(bandPlanAct, &QAction::toggled, this, [this](bool on) {
-        spectrum()->setShowBandPlan(on);
+        for (auto* a : m_panStack->allApplets()) a->spectrumWidget()->setShowBandPlan(on);
         AppSettings::instance().setValue("ShowBandPlan", on ? "True" : "False");
         AppSettings::instance().save();
     });
@@ -2064,9 +2017,11 @@ void MainWindow::onSliceRemoved(int id)
             }
         }
     }
-    // Fallback: also clean the active/default spectrum
-    spectrum()->removeSliceOverlay(id);
-    spectrum()->removeVfoWidget(id);
+    // Clean slice overlay and VFO widget from all spectrums
+    for (auto* a : m_panStack->allApplets()) {
+        a->spectrumWidget()->removeSliceOverlay(id);
+        a->spectrumWidget()->removeVfoWidget(id);
+    }
 
     // Reset panadapter state so display settings re-sync after profile load
     m_radioModel.resetPanState();
@@ -2298,6 +2253,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setFftFillAlpha);
     connect(menu, &SpectrumOverlayMenu::fftFillColorChanged,
             sw, &SpectrumWidget::setFftFillColor);
+    connect(menu, &SpectrumOverlayMenu::noiseFloorPositionChanged,
+            sw, &SpectrumWidget::setNoiseFloorPosition);
+    connect(menu, &SpectrumOverlayMenu::noiseFloorEnableChanged,
+            sw, &SpectrumWidget::setNoiseFloorEnable);
 
     // ── Per-pan display controls → radio commands ────────────────────────
     // Each pan's overlay sends commands with its own panId/wfId, not the
