@@ -1640,7 +1640,7 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
         QRect labelRect(x - tw / 2, startY, tw, th);
         for (const auto& r : placed) {
             if (labelRect.intersects(r))
-                labelRect.moveTop(r.bottom() + 1);
+                labelRect.moveTop(r.bottom() + 3);
         }
         // Don't draw if exceeds max levels
         if (labelRect.bottom() > maxBottom)
