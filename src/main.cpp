@@ -12,24 +12,56 @@
 #include <QDateTime>
 #include <QTextStream>
 #include <QStandardPaths>
+#include <QRegularExpression>
 
 static QFile* s_logFile = nullptr;
+
+// Redact PII from log messages before writing to file.
+// Patterns: IP addresses, radio serial numbers, Auth0 tokens, MAC addresses.
+static QString redactPii(const QString& msg)
+{
+    QString out = msg;
+
+    // IPv4 addresses: 192.168.50.121 → *.*.*. 121 (keep last octet)
+    static const QRegularExpression ipRe(
+        R"((\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}))");
+    out.replace(ipRe, QStringLiteral("*.*.*. \\4"));
+
+    // Radio serial: 4424-1213-8600-7836 → ****-****-****-7836
+    static const QRegularExpression serialRe(
+        R"(\d{4}-\d{4}-\d{4}-(\d{4}))");
+    out.replace(serialRe, QStringLiteral("****-****-****-\\1"));
+
+    // Auth0 tokens (long base64 strings after id_token or token)
+    static const QRegularExpression tokenRe(
+        R"((id_token[= :]|token[= :])\s*([A-Za-z0-9_\-\.]{20})[A-Za-z0-9_\-\.]+)");
+    out.replace(tokenRe, QStringLiteral("\\1 \\2...REDACTED"));
+
+    // MAC addresses: 00-1C-2D-05-37-2A → **-**-**-**-**-2A
+    static const QRegularExpression macRe(
+        R"(([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2})-([0-9A-Fa-f]{2}))");
+    out.replace(macRe, QStringLiteral("**-**-**-**-**-\\6"));
+
+    return out;
+}
 
 static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
 {
     Q_UNUSED(ctx);
     static const char* labels[] = {"DBG", "WRN", "CRT", "FTL", "INF"};
     const char* label = (type <= QtInfoMsg) ? labels[type] : "???";
-    const QString line = QString("[%1] %2: %3\n")
-        .arg(QDateTime::currentDateTime().toString("HH:mm:ss.zzz"), label, msg);
 
-    // Write to log file
+    const QString safeMsg = redactPii(msg);
+    const QString line = QString("[%1] %2: %3\n")
+        .arg(QDateTime::currentDateTime().toString("HH:mm:ss.zzz"), label, safeMsg);
+
+    // Write to log file (PII-redacted)
     if (s_logFile && s_logFile->isOpen()) {
         QTextStream ts(s_logFile);
         ts << line;
         ts.flush();
     }
-    // Also print to stderr
+    // Also print to stderr (PII-redacted)
     fprintf(stderr, "%s", line.toLocal8Bit().constData());
 }
 
