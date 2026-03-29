@@ -9,9 +9,7 @@
 #include <QString>
 #include <functional>
 #include <memory>
-
-// Forward-declare RtMidiIn to avoid pulling rtmidi headers into all includers
-class RtMidiIn;
+#include <RtMidi.h>
 
 namespace AetherSDR {
 

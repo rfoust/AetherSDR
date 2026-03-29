@@ -380,21 +380,24 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(AetherSDR PRIVATE Qt6::WebSockets)
 endif()
 
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(RTMIDI rtmidi)
-endif()
-if(RTMIDI_FOUND)
-    message(STATUS "RtMidi found (${RTMIDI_VERSION}) — MIDI controller support enabled")
-    target_compile_definitions(AetherSDR PRIVATE HAVE_MIDI)
-    target_sources(AetherSDR PRIVATE
-        src/core/MidiControlManager.cpp
-        src/core/MidiSettings.cpp
-        src/gui/MidiMappingDialog.cpp)
-    target_include_directories(AetherSDR PRIVATE ${RTMIDI_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${RTMIDI_LIBRARIES})
+# Bundled RtMidi (MIT license) — MIDI controller support on all platforms
+message(STATUS "MIDI controller support enabled (bundled RtMidi)")
+target_compile_definitions(AetherSDR PRIVATE HAVE_MIDI)
+target_sources(AetherSDR PRIVATE
+    third_party/rtmidi/RtMidi.cpp
+    src/core/MidiControlManager.cpp
+    src/core/MidiSettings.cpp
+    src/gui/MidiMappingDialog.cpp)
+target_include_directories(AetherSDR PRIVATE third_party/rtmidi)
+if(APPLE)
+    target_compile_definitions(AetherSDR PRIVATE __MACOSX_CORE__)
+    target_link_libraries(AetherSDR PRIVATE "-framework CoreMIDI" "-framework CoreFoundation")
+elseif(WIN32)
+    target_compile_definitions(AetherSDR PRIVATE __WINDOWS_MM__)
+    target_link_libraries(AetherSDR PRIVATE winmm)
 else()
-    message(STATUS "RtMidi not found — MIDI controller support disabled")
+    target_compile_definitions(AetherSDR PRIVATE __LINUX_ALSA__)
+    target_link_libraries(AetherSDR PRIVATE asound)
 endif()
 
 if(PORTAUDIO_FOUND)
