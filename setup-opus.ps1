@@ -54,16 +54,24 @@ Copy-Item "$($srcDir.FullName)\include\*.h" "$OutDir\include\opus\"
 # ── Build static library from source using CMake + MSVC ──────────────────
 Write-Host "Building Opus from source with MSVC..." -ForegroundColor Cyan
 
-if (-not (Test-Path $VsVars)) {
-    Write-Error "Visual Studio 2022 not found at: $VsVars"
-    exit 1
-}
-
-# Import MSVC env
-$envVars = & cmd.exe /c "`"$VsVars`" >nul 2>&1 && set" 2>&1
-foreach ($line in $envVars) {
-    if ($line -match "^([^=]+)=(.*)$") {
-        [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+# Import MSVC env if not already set (CI uses ilammy/msvc-dev-cmd)
+if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path $VsVars)) {
+        # Try Enterprise/Professional editions
+        $VsVars = $VsVars -replace "Community", "Enterprise"
+        if (-not (Test-Path $VsVars)) {
+            $VsVars = $VsVars -replace "Enterprise", "Professional"
+        }
+    }
+    if (-not (Test-Path $VsVars)) {
+        Write-Error "Visual Studio 2022 not found"
+        exit 1
+    }
+    $envVars = & cmd.exe /c "`"$VsVars`" >nul 2>&1 && set" 2>&1
+    foreach ($line in $envVars) {
+        if ($line -match "^([^=]+)=(.*)$") {
+            [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
     }
 }
 
