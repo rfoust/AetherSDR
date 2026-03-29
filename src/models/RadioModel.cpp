@@ -231,12 +231,14 @@ QString RadioModel::audioCompressionParam() const
 
 void RadioModel::sendCwKey(bool down)
 {
-    sendCmd(QString("cw key %1").arg(down ? 1 : 0));
+    // "cw key immediate" bypasses the netcw VITA-49 stream and keys via TCP.
+    // The full netcw stream (UDP with timing/redundancy) is a future enhancement.
+    sendCmd(QString("cw key immediate %1").arg(down ? 1 : 0));
 }
 
 void RadioModel::sendCwPaddle(bool dit, bool dah)
 {
-    sendCmd(QString("cw key %1 %2").arg(dit ? 1 : 0).arg(dah ? 1 : 0));
+    sendCmd(QString("cw key immediate %1 %2").arg(dit ? 1 : 0).arg(dah ? 1 : 0));
 }
 
 void RadioModel::cwAutoTune(int sliceId, bool intermittent)
