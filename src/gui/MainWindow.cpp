@@ -2212,7 +2212,7 @@ void MainWindow::buildMenuBar()
     auto* settingsMenu = menuBar()->addMenu("&Settings");
 
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
-    radioSetup->setMenuRole(QAction::NoRole);      // prevent macOS auto-reparenting (#883)
+    radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
     connect(radioSetup, &QAction::triggered, this, [this] {
         if (m_radioSetupDialog) {
             m_radioSetupDialog->raise();
@@ -2269,12 +2269,6 @@ void MainWindow::buildMenuBar()
         });
         dlg->show();
     });
-
-    // macOS "AetherSDR → Preferences" entry — triggers Radio Setup (#883)
-    auto* macPrefsAction = new QAction("Preferences...", this);
-    macPrefsAction->setMenuRole(QAction::PreferencesRole);
-    connect(macPrefsAction, &QAction::triggered, radioSetup, &QAction::trigger);
-    settingsMenu->addAction(macPrefsAction);
 
     auto* chooseRadio = settingsMenu->addAction("Choose Radio / SmartLink Setup...");
     chooseRadio->setMenuRole(QAction::NoRole);      // prevent macOS auto-reparenting (#883)
