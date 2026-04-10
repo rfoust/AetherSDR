@@ -110,6 +110,7 @@
 #endif
 #include <QDebug>
 #ifdef Q_OS_WIN
+#define NOMINMAX
 #include <windows.h>
 #include <psapi.h>
 #else
