@@ -151,25 +151,16 @@ public:
     }
 
     // Panadapter bandwidth limits by radio model (MHz).
-    // Values based on each radio's ADC / RX coverage.
+    // Dual-SCU radios (6700, 8400, 8600) support 14 MHz pan width.
     double maxPanBandwidthMhz() const {
-        if (m_model.contains("6700"))
-            return 7.500;   // dual SCU, wide ADC — tested on 6700
+        if (m_model.contains("6700") || m_model.contains("8600"))
+            return 14.0;
+        if (m_model.contains("8400"))
+            return 7.0;
         if (m_model.contains("6500"))
-            return 7.200;   // RX: 0.03–72 MHz
-        // 6300, 6400: RX: 0.03–54 MHz
-        if (m_model.contains("6300") || m_model.contains("6400"))
-            return 5.400;
-        // 6600: RX: 0.03–54 MHz
-        if (m_model.contains("6600"))
-            return 5.400;
-        // 8400 / 8600: 30 kHz–54 MHz
-        if (m_model.contains("8400") || m_model.contains("8600"))
-            return 5.400;
-        // Aurora AU-510 / AU-520: 30 kHz–54 MHz
-        if (m_model.contains("AU-"))
-            return 5.400;
-        return 5.400;   // safe default for unknown radios
+            return 7.2;
+        // 6300, 6400, 6600, Aurora: single SCU
+        return 5.4;
     }
     double minPanBandwidthMhz() const { return 0.010; }  // 10 kHz — all models
 
