@@ -27,7 +27,7 @@ class OpusCodec;
 // All packets from the radio use ExtDataWithStream (VITA-49 type 3), not IFDataWithStream.
 //
 // Protocol:
-//   1. Call start(conn) — binds port 4991 (LAN VITA port), falls back to OS-assigned.
+//   1. Call start(conn) — binds an OS-assigned UDP port (avoids monopolising 4991).
 //   2. Register the port with the radio via "client udpport <port>" (done by RadioModel).
 //   3. The radio streams panadapter and audio to that port.
 

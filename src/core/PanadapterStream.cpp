@@ -72,16 +72,11 @@ bool PanadapterStream::start(RadioConnection* conn)
 {
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
 
-    static constexpr quint16 LAN_VITA_PORT = 4991;
-    bool bound = m_socket.bind(QHostAddress::AnyIPv4, LAN_VITA_PORT,
-                               QAbstractSocket::ReuseAddressHint);
-    if (bound)
-        qCDebug(lcVita49) << "PanadapterStream: bound to LAN VITA-49 port" << LAN_VITA_PORT;
-    else {
-        qCDebug(lcVita49) << "PanadapterStream: port" << LAN_VITA_PORT
-                 << "unavailable, using OS-assigned port";
-        bound = m_socket.bind(QHostAddress::AnyIPv4, 0);
-    }
+    // Use an OS-assigned port instead of the well-known VITA-49 port (4991).
+    // The radio learns our actual port from the UDP registration packet, so
+    // the local port number doesn't matter.  Binding 4991 would prevent other
+    // SmartSDR clients on the same host from receiving VITA-49 data (Multi-Flex).
+    bool bound = m_socket.bind(QHostAddress::AnyIPv4, 0);
     if (!bound) {
         qCWarning(lcVita49) << "PanadapterStream: failed to bind UDP socket:"
                    << m_socket.errorString();
