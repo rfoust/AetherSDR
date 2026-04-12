@@ -53,6 +53,7 @@ signals:
     void activated(const QString& panId);
     void closeRequested(const QString& panId);
     void dockRequested(const QString& panId);
+    void floatRequested(const QString& panId);
     void pitchRangeChanged(int minHz, int maxHz);
     void dragStarted(const QString& panId);
     void dragDroppedOutside(const QString& panId);

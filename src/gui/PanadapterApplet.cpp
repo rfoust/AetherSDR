@@ -16,6 +16,7 @@
 #include <QApplication>
 #include <QPainter>
 #include <QTimer>
+#include <QMenu>
 
 namespace AetherSDR {
 
@@ -312,6 +313,29 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
             if (me->button() == Qt::LeftButton) {
                 m_dragStartPos = me->pos();
             }
+        }
+    }
+
+    // Title bar right-click context menu: Pop out / Dock
+    if (obj == m_titleBarWidget && ev->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(ev);
+        if (me->button() == Qt::RightButton) {
+            bool floating = m_dockBtn->isVisible();
+            auto* menu = new QMenu(this);
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            if (floating) {
+                QAction* act = menu->addAction(QStringLiteral("\u21a9 Dock"));
+                connect(act, &QAction::triggered, this, [this]() {
+                    emit dockRequested(m_panId);
+                });
+            } else {
+                QAction* act = menu->addAction(QStringLiteral("\u2197 Pop out"));
+                connect(act, &QAction::triggered, this, [this]() {
+                    emit floatRequested(m_panId);
+                });
+            }
+            menu->popup(me->globalPosition().toPoint());
+            return true;
         }
     }
 

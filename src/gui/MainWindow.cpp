@@ -5246,6 +5246,24 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         m_panStack->floatPanadapter(panId, QCursor::pos());
     });
 
+    // ── Right-click "Pop out" on title bar ──────────────────────────────
+    connect(applet, &PanadapterApplet::floatRequested,
+            this, [this](const QString& panId) {
+        if (m_panStack->isFloating(panId)) {
+            return;
+        }
+        int dockedCount = 0;
+        for (auto* ap : m_panStack->allApplets()) {
+            if (!m_panStack->isFloating(ap->panId())) {
+                dockedCount++;
+            }
+        }
+        if (dockedCount <= 1) {
+            return;
+        }
+        m_panStack->floatPanadapter(panId);
+    });
+
     // ── User drag actions from spectrum → radio (per-pan) ──────────────────
     connect(sw, &SpectrumWidget::bandwidthChangeRequested,
             this, [this, applet](double bw) {
