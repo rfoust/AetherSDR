@@ -32,6 +32,7 @@ public:
     void clearSliceTitle();
 
     // CW decode panel
+    void setDockButtonVisible(bool visible);
     void setCwPanelVisible(bool visible);
     void appendCwText(const QString& text, float cost = 0.0f);
     void setCwStats(float pitchHz, float speedWpm);
@@ -44,6 +45,7 @@ public:
 signals:
     void activated(const QString& panId);
     void closeRequested(const QString& panId);
+    void dockClicked();
     void pitchRangeChanged(int minHz, int maxHz);
 
 protected:
@@ -53,6 +55,7 @@ private:
     QString m_panId;
     SpectrumWidget* m_spectrum{nullptr};
     QLabel*         m_titleLabel{nullptr};
+    QPushButton*    m_dockBtn{nullptr};
 
     // CW decode
     QWidget*   m_cwPanel{nullptr};

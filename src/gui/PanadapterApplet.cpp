@@ -32,11 +32,27 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     barLayout->setContentsMargins(6, 1, 4, 1);
     barLayout->setSpacing(2);
 
+    // Drag grip dots (matching applet title bar style)
+    auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
+    grip->setStyleSheet("QLabel { background: transparent; color: #607080; font-size: 10px; }");
+    barLayout->addWidget(grip);
+
     m_titleLabel = new QLabel("Slice A");
     m_titleLabel->setStyleSheet("QLabel { background: transparent; color: #8aa8c0; "
                                 "font-size: 10px; font-weight: bold; }");
     barLayout->addWidget(m_titleLabel);
     barLayout->addStretch();
+
+    // Dock button — hidden when docked, shown when floating
+    m_dockBtn = new QPushButton("\u21a9 Dock");
+    m_dockBtn->setFixedSize(50, 14);
+    m_dockBtn->setStyleSheet(
+        "QPushButton { background: #1a2a3a; color: #8aa8c0; border: 1px solid #304050; "
+        "border-radius: 3px; font-size: 9px; font-weight: bold; }"
+        "QPushButton:hover { background: #203040; color: #c8d8e8; }");
+    m_dockBtn->hide();
+    connect(m_dockBtn, &QPushButton::clicked, this, &PanadapterApplet::dockClicked);
+    barLayout->addWidget(m_dockBtn);
 
     const QString btnStyle = QStringLiteral(
         "QPushButton { background: transparent; color: #6a8090; "
@@ -215,6 +231,11 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     m_cwPanel->hide();
     layout->addWidget(m_cwPanel);
+}
+
+void PanadapterApplet::setDockButtonVisible(bool visible)
+{
+    if (m_dockBtn) m_dockBtn->setVisible(visible);
 }
 
 void PanadapterApplet::setSliceId(int id)
