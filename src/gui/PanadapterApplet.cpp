@@ -10,6 +10,12 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QMouseEvent>
+#include <QDrag>
+#include <QMimeData>
+#include <QApplication>
+#include <QPainter>
+#include <QTimer>
 
 namespace AetherSDR {
 
@@ -21,18 +27,20 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     layout->setSpacing(0);
 
     // ── Title bar (16px gradient, matching applet style) ─────────────────
-    auto* titleBar = new QWidget;
-    titleBar->setFixedHeight(16);
-    titleBar->setStyleSheet(
+    m_titleBarWidget = new QWidget;
+    m_titleBarWidget->setFixedHeight(16);
+    m_titleBarWidget->setCursor(Qt::OpenHandCursor);
+    m_titleBarWidget->installEventFilter(this);
+    m_titleBarWidget->setStyleSheet(
         "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
         "stop:0 #3a4a5a, stop:0.5 #2a3a4a, stop:1 #1a2a38); "
         "border-bottom: 1px solid #0a1a28; }");
 
-    auto* barLayout = new QHBoxLayout(titleBar);
+    auto* barLayout = new QHBoxLayout(m_titleBarWidget);
     barLayout->setContentsMargins(6, 1, 4, 1);
     barLayout->setSpacing(2);
 
-    m_titleLabel = new QLabel("Slice A");
+    m_titleLabel = new QLabel;
     m_titleLabel->setStyleSheet("QLabel { background: transparent; color: #8aa8c0; "
                                 "font-size: 10px; font-weight: bold; }");
     barLayout->addWidget(m_titleLabel);
@@ -43,15 +51,32 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "border: none; font-size: 9px; padding: 0; }"
         "QPushButton:hover { color: #c8d8e8; }");
 
+    // ── Dock button (hidden by default, shown when floating) ─────────
+    m_dockBtn = new QPushButton(QStringLiteral("\u21a9 Dock"));
+    m_dockBtn->setFixedHeight(14);
+    m_dockBtn->setCursor(Qt::ArrowCursor);
+    m_dockBtn->setToolTip("Return panadapter to the main window");
+    m_dockBtn->setStyleSheet(
+        "QPushButton { background: #1a2a3a; color: #8aa8c0; "
+        "border: 1px solid #304050; border-radius: 3px; "
+        "font-size: 9px; padding: 0 5px; }"
+        "QPushButton:hover { background: #243848; color: #c8d8e8; }");
+    m_dockBtn->hide();
+    connect(m_dockBtn, &QPushButton::clicked, this, [this]() {
+        emit dockRequested(m_panId);
+    });
+    barLayout->addWidget(m_dockBtn);
+
     auto* closeBtn = new QPushButton("\u00D7");
     closeBtn->setFixedSize(14, 14);
+    closeBtn->setCursor(Qt::ArrowCursor);
     closeBtn->setStyleSheet(btnStyle + "QPushButton:hover { color: #ff4040; }");
     connect(closeBtn, &QPushButton::clicked, this, [this]() {
         emit closeRequested(m_panId);
     });
     barLayout->addWidget(closeBtn);
 
-    layout->addWidget(titleBar);
+    layout->addWidget(m_titleBarWidget);
 
     // ── Spectrum widget (FFT + waterfall) ────────────────────────────────
     m_spectrum = new SpectrumWidget(this);
@@ -219,14 +244,18 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
 void PanadapterApplet::setSliceId(int id)
 {
-    const char letters[] = "ABCD";
-    const char letter = (id >= 0 && id < 4) ? letters[id] : '?';
-    m_titleLabel->setText(QString("Slice %1").arg(letter));
+    Q_UNUSED(id);
+    // Title bar is intentionally blank — slice info shown in the spectrum overlay
 }
 
 void PanadapterApplet::clearSliceTitle()
 {
     m_titleLabel->clear();
+}
+
+void PanadapterApplet::setDockButtonVisible(bool visible)
+{
+    m_dockBtn->setVisible(visible);
 }
 
 void PanadapterApplet::setCwPanelVisible(bool visible)
@@ -274,8 +303,97 @@ void PanadapterApplet::clearCwText()
 
 bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
 {
-    if (ev->type() == QEvent::MouseButtonPress)
+    if (ev->type() == QEvent::MouseButtonPress) {
         emit activated(m_panId);
+
+        // Title bar drag initiation: record start position
+        if (obj == m_titleBarWidget) {
+            auto* me = static_cast<QMouseEvent*>(ev);
+            if (me->button() == Qt::LeftButton) {
+                m_dragStartPos = me->pos();
+            }
+        }
+    }
+
+    // Title bar drag threshold check
+    if (obj == m_titleBarWidget && ev->type() == QEvent::MouseMove) {
+        auto* me = static_cast<QMouseEvent*>(ev);
+        if ((me->buttons() & Qt::LeftButton) && !m_dragStartPos.isNull()) {
+            if ((me->pos() - m_dragStartPos).manhattanLength() >= QApplication::startDragDistance()) {
+                m_titleBarWidget->setCursor(Qt::ClosedHandCursor);
+
+                auto* drag = new QDrag(this);
+                auto* mimeData = new QMimeData;
+                mimeData->setData(kMimeType, m_panId.toUtf8());
+                drag->setMimeData(mimeData);
+
+                // Build a semi-transparent preview thumbnail
+                QPixmap snapshot = this->grab();
+                constexpr int kPreviewWidth = 320;
+                QSize previewSize = snapshot.size().scaled(
+                    kPreviewWidth, kPreviewWidth, Qt::KeepAspectRatio);
+                snapshot = snapshot.scaled(
+                    previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                QPixmap previewPm(snapshot.size());
+                previewPm.fill(Qt::transparent);
+                {
+                    QPainter painter(&previewPm);
+                    painter.setOpacity(0.65);
+                    painter.drawPixmap(0, 0, snapshot);
+                    painter.setOpacity(1.0);
+                    painter.setPen(QPen(QColor(0x00, 0xb4, 0xd8, 180), 2));
+                    painter.drawRect(previewPm.rect().adjusted(1, 1, -1, -1));
+                }
+
+                // Show the preview as a floating window that tracks the cursor.
+                // The QDrag pixmap is 1x1 transparent so the OS snap-back
+                // animation is invisible when the drop is not accepted.
+                QPixmap transparent(1, 1);
+                transparent.fill(Qt::transparent);
+                drag->setPixmap(transparent);
+
+                auto* previewWin = new QWidget(nullptr,
+                    Qt::ToolTip | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+                previewWin->setAttribute(Qt::WA_TranslucentBackground);
+                previewWin->setAttribute(Qt::WA_ShowWithoutActivating);
+                previewWin->setFixedSize(previewPm.size() / previewPm.devicePixelRatio());
+                auto* pmLabel = new QLabel(previewWin);
+                pmLabel->setPixmap(previewPm);
+                pmLabel->setGeometry(0, 0, previewWin->width(), previewWin->height());
+                previewWin->move(QCursor::pos() - QPoint(previewWin->width() / 2, 12));
+                previewWin->show();
+
+                auto* tracker = new QTimer(previewWin);
+                connect(tracker, &QTimer::timeout, previewWin, [previewWin]() {
+                    previewWin->move(QCursor::pos() - QPoint(previewWin->width() / 2, 12));
+                });
+                tracker->start(16);  // ~60 fps
+
+                emit dragStarted(m_panId);
+                m_dragStartPos = QPoint();  // reset
+
+                Qt::DropAction result = drag->exec(Qt::MoveAction);
+
+                // Destroy the floating preview immediately
+                delete previewWin;
+
+                // If the drop was not accepted by any target (released outside
+                // the PanadapterStack), signal that we should float this pan.
+                if (result == Qt::IgnoreAction) {
+                    emit dragDroppedOutside(m_panId);
+                }
+
+                m_titleBarWidget->setCursor(Qt::OpenHandCursor);
+                return true;
+            }
+        }
+    }
+
+    // Reset drag on release
+    if (obj == m_titleBarWidget && ev->type() == QEvent::MouseButtonRelease) {
+        m_dragStartPos = QPoint();
+    }
+
     return QWidget::eventFilter(obj, ev);
 }
 

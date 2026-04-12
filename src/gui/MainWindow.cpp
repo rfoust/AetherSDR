@@ -3,6 +3,7 @@
 #include "TitleBar.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
+#include "PanFloatingWindow.h"
 #include "PanLayoutDialog.h"
 #include "core/CommandParser.h"
 #include "core/LogManager.h"
@@ -80,6 +81,9 @@
 #include <QActionGroup>
 #include <QLabel>
 #include <QCloseEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QMessageBox>
 #include <QShortcut>
 #include <QScrollArea>
@@ -200,6 +204,7 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowIcon(QIcon(":/icon.png"));
     setMinimumSize(1024, 600);
     resize(1400, 800);
+    setAcceptDrops(true);
 
     applyDarkTheme();
 
@@ -934,11 +939,16 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Debounced layout restore: after all pans are added on connect,
         // rearrange to the saved layout (e.g. 2h instead of default vertical).
+        // Only run during initial connection — not when the user manually adds pans.
+        // Once the timer fires once, it won't fire again (user-added pans skip it).
         if (!m_layoutRestoreTimer) {
             m_layoutRestoreTimer = new QTimer(this);
             m_layoutRestoreTimer->setSingleShot(true);
             m_layoutRestoreTimer->setInterval(1000);
             connect(m_layoutRestoreTimer, &QTimer::timeout, this, [this]() {
+                // Mark that initial layout restore has completed —
+                // subsequent panadapterAdded signals won't retrigger this.
+                m_layoutRestoreTimer->setProperty("fired", true);
                 // The radio restores pans from the GUIClientID session.
                 // Accept whatever the radio gives and arrange based on count.
                 int panCount = m_panStack->count();
@@ -974,10 +984,36 @@ MainWindow::MainWindow(QWidget* parent)
                         if (pan->panStreamId())
                             m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
                     }
+
+                    // Restore floating pan state from last session (by ordinal index)
+                    QList<int> floatIndices = m_panStack->savedFloatingIndices();
+                    qDebug() << "Float restore: indices =" << floatIndices
+                             << "panCount =" << m_panStack->count();
+                    if (!floatIndices.isEmpty()) {
+                        QList<PanadapterApplet*> allApplets = m_panStack->allApplets();
+                        qDebug() << "Float restore: allApplets.size =" << allApplets.size();
+                        for (int idx : floatIndices) {
+                            if (idx >= 0 && idx < allApplets.size()) {
+                                const QString fid = allApplets[idx]->panId();
+                                qDebug() << "Float restore: floating pan idx" << idx
+                                         << "panId =" << fid;
+                                if (!m_panStack->isFloating(fid)) {
+                                    m_panStack->floatPanadapter(fid);
+                                }
+                            } else {
+                                qDebug() << "Float restore: index" << idx
+                                         << "out of range (applets:" << allApplets.size() << ")";
+                            }
+                        }
+                    }
                 });
             });
         }
-        m_layoutRestoreTimer->start();  // restart on each new pan
+        // Only restart during initial connection — once the timer has fired
+        // (initial layout applied), later panadapterAdded signals are user-created.
+        if (!m_layoutRestoreTimer->property("fired").toBool()) {
+            m_layoutRestoreTimer->start();
+        }
     });
     // Re-push xpixels/ypixels when the radio requests it (profile change, reconnect, etc.)
     connect(&m_radioModel, &RadioModel::panDimensionsNeeded,
@@ -1020,6 +1056,53 @@ MainWindow::MainWindow(QWidget* parent)
             m_panStack->rearrangeLayout("2v");
         else if (remaining == 3)
             m_panStack->rearrangeLayout("2h1");
+    });
+
+    // ── Float/dock: re-push xpixels/ypixels after layout change ─────────
+    connect(m_panStack, &PanadapterStack::panFloated,
+            this, [this](const QString& panId) {
+        // After floating, ALL pans may have resized (including the floated one)
+        QTimer::singleShot(200, this, [this]() {
+            for (auto* applet : m_panStack->allApplets()) {
+                auto* sw = applet->spectrumWidget();
+                auto* pan = m_radioModel.panadapter(applet->panId());
+                if (!sw || !pan) {
+                    continue;
+                }
+                int xpix = qMax(sw->width(), 200);
+                int ypix = qMax(sw->height(), 200);
+                m_radioModel.sendCommand(
+                    QString("display pan set %1 xpixels=%2 ypixels=%3")
+                        .arg(pan->panId()).arg(xpix).arg(ypix));
+                if (pan->panStreamId()) {
+                    m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+                }
+            }
+        });
+        Q_UNUSED(panId);
+    });
+
+    connect(m_panStack, &PanadapterStack::panDocked,
+            this, [this](const QString& panId) {
+        // After docking, all pans (including newly docked) may have resized
+        QTimer::singleShot(200, this, [this]() {
+            for (auto* applet : m_panStack->allApplets()) {
+                auto* sw = applet->spectrumWidget();
+                auto* pan = m_radioModel.panadapter(applet->panId());
+                if (!sw || !pan) {
+                    continue;
+                }
+                int xpix = qMax(sw->width(), 200);
+                int ypix = qMax(sw->height(), 200);
+                m_radioModel.sendCommand(
+                    QString("display pan set %1 xpixels=%2 ypixels=%3")
+                        .arg(pan->panId()).arg(xpix).arg(ypix));
+                if (pan->panStreamId()) {
+                    m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+                }
+            }
+        });
+        Q_UNUSED(panId);
     });
 
     // ── Per-panadapter signal wiring (extracted for multi-pan support) ──────
@@ -1980,6 +2063,13 @@ MainWindow::~MainWindow()
 void MainWindow::closeEvent(QCloseEvent* event)
 {
     m_shuttingDown = true;
+
+    // Mark floating panadapter windows as shutting down so their closeEvent
+    // accepts the close instead of trying to dock (Cmd+Q fix).
+    if (m_panStack) {
+        m_panStack->prepareShutdown();
+    }
+
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
@@ -2006,6 +2096,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // DEXP saved on-change in PhoneApplet — do NOT overwrite here, because
     // the radio may have reset DEXP to off (model reflects radio state, not
     // the user's preference).
+
+    // Save floating panadapter state
+    if (m_panStack) {
+        m_panStack->saveFloatState();
+    }
 
     s.save();
 
@@ -2048,8 +2143,63 @@ void MainWindow::keyReleaseEvent(QKeyEvent* event)
     QMainWindow::keyReleaseEvent(event);
 }
 
+// ── Drag-and-drop: accept panadapter drops anywhere on MainWindow to
+//    prevent QDrag snap-back animation when floating a panadapter. ─────────
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasFormat(PanadapterApplet::kMimeType)) {
+        event->acceptProposedAction();
+    } else {
+        QMainWindow::dragEnterEvent(event);
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent* event)
+{
+    if (!event->mimeData()->hasFormat(PanadapterApplet::kMimeType)) {
+        QMainWindow::dropEvent(event);
+        return;
+    }
+    event->acceptProposedAction();
+
+    const QString panId = QString::fromUtf8(
+        event->mimeData()->data(PanadapterApplet::kMimeType));
+
+    // If the drop landed on PanadapterStack, it already handled rearrangement
+    // via its own dropEvent. Only float if it landed outside the stack.
+    if (m_panStack) {
+        const QPoint stackLocal = m_panStack->mapFromGlobal(
+            mapToGlobal(event->position().toPoint()));
+        if (m_panStack->rect().contains(stackLocal)) {
+            return;  // PanadapterStack::dropEvent already handled it
+        }
+    }
+
+    // Drop landed outside the stack but inside MainWindow → float
+    if (m_panStack && !m_panStack->isFloating(panId)) {
+        int dockedCount = 0;
+        for (auto* ap : m_panStack->allApplets()) {
+            if (!m_panStack->isFloating(ap->panId())) {
+                dockedCount++;
+            }
+        }
+        if (dockedCount > 1) {
+            m_panStack->floatPanadapter(panId, QCursor::pos());
+        }
+    }
+}
+
 bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 {
+    // Cmd+Q / app quit: mark floating windows as shutting down BEFORE
+    // closeAllWindows() sends them close events (which would dock them).
+    if (event->type() == QEvent::Quit) {
+        if (m_panStack) {
+            m_panStack->prepareShutdown();
+        }
+    }
+
     // Space PTT: intercept at application level so it works regardless of
     // which widget has focus (buttons, combos, etc. won't steal Space).
     if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
@@ -2196,21 +2346,93 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         return true;
     }
     if (obj == m_addPanLabel && event->type() == QEvent::MouseButtonPress) {
-        if (!m_radioModel.isConnected()) return true;
-        int maxPans = m_radioModel.maxPanadapters();
-        // Determine current layout from actual pan count, not saved setting
-        int activePanCount = m_panStack ? m_panStack->count() : 1;
-        QString currentLayout = "1";
-        if (activePanCount >= 2)
-            currentLayout = AppSettings::instance()
-                .value("PanadapterLayout", "1").toString();
-        PanLayoutDialog dlg(maxPans, currentLayout, this);
-        if (dlg.exec() == QDialog::Accepted && !dlg.selectedLayout().isEmpty()) {
-            const QString layoutId = dlg.selectedLayout();
-            auto& s = AppSettings::instance();
-            s.setValue("PanadapterLayout", layoutId);
-            s.save();
-            applyPanLayout(layoutId);
+        if (!m_radioModel.isConnected()) {
+            return true;
+        }
+        auto* me = static_cast<QMouseEvent*>(event);
+
+        if (me->button() == Qt::LeftButton) {
+            // Left-click: create a new panadapter at the bottom of the stack
+            int maxPans = m_radioModel.maxPanadapters();
+            int activePanCount = m_panStack ? m_panStack->count() : 1;
+            if (activePanCount >= maxPans) {
+                return true;  // already at max
+            }
+            m_radioModel.sendCmdPublic(
+                "display panafall create x=100 y=100",
+                [this](int code, const QString& body) {
+                    if (code != 0) {
+                        qWarning() << "addPan: panafall create failed, code"
+                                   << Qt::hex << code << body;
+                        return;
+                    }
+                    const auto kvs = CommandParser::parseKVs(body);
+                    QString panId;
+                    if (kvs.contains("pan"))       panId = kvs["pan"];
+                    else if (kvs.contains("id"))   panId = kvs["id"];
+                    else                           panId = body.trimmed();
+                    if (!panId.isEmpty()) {
+                        m_radioModel.sendCommand(
+                            QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
+                        m_radioModel.sendCommand(
+                            QString("display pan set %1 fps=25").arg(panId));
+                    }
+                });
+            return true;
+        }
+
+        if (me->button() == Qt::RightButton) {
+            // Right-click: context menu
+            auto* menu = new QMenu(this);
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+
+            menu->addAction("Add Panadapter", this, [this]() {
+                if (!m_radioModel.isConnected()) {
+                    return;
+                }
+                int maxPans = m_radioModel.maxPanadapters();
+                int activePanCount = m_panStack ? m_panStack->count() : 1;
+                if (activePanCount >= maxPans) {
+                    return;
+                }
+                m_radioModel.sendCmdPublic(
+                    "display panafall create x=100 y=100",
+                    [this](int code, const QString& body) {
+                        if (code != 0) return;
+                        const auto kvs = CommandParser::parseKVs(body);
+                        QString panId;
+                        if (kvs.contains("pan"))       panId = kvs["pan"];
+                        else if (kvs.contains("id"))   panId = kvs["id"];
+                        else                           panId = body.trimmed();
+                        if (!panId.isEmpty()) {
+                            m_radioModel.sendCommand(
+                                QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
+                            m_radioModel.sendCommand(
+                                QString("display pan set %1 fps=25").arg(panId));
+                        }
+                    });
+            });
+
+            menu->addAction("Select Panadapter Grid...", this, [this]() {
+                int maxPans = m_radioModel.maxPanadapters();
+                int activePanCount = m_panStack ? m_panStack->count() : 1;
+                QString currentLayout = "1";
+                if (activePanCount >= 2) {
+                    currentLayout = AppSettings::instance()
+                        .value("PanadapterLayout", "1").toString();
+                }
+                PanLayoutDialog dlg(maxPans, currentLayout, this);
+                if (dlg.exec() == QDialog::Accepted && !dlg.selectedLayout().isEmpty()) {
+                    const QString layoutId = dlg.selectedLayout();
+                    auto& s = AppSettings::instance();
+                    s.setValue("PanadapterLayout", layoutId);
+                    s.save();
+                    applyPanLayout(layoutId);
+                }
+            });
+
+            menu->popup(me->globalPosition().toPoint());
+            return true;
         }
         return true;
     }
@@ -3988,6 +4210,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
 {
     m_connPanel->setConnected(connected);
     if (connected) {
+        // Reset layout restore timer so it can fire again for this session
+        if (m_layoutRestoreTimer) {
+            m_layoutRestoreTimer->setProperty("fired", false);
+        }
         m_radioInfoLabel->setText(m_radioModel.model());
         m_radioVersionLabel->setText(m_radioModel.version());
         m_stationLabel->setText(m_radioModel.nickname());
@@ -4419,8 +4645,15 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Set the panadapter applet's slice label (e.g. "Slice B") based on
     // which pan this slice belongs to
     if (m_panStack && !s->panId().isEmpty()) {
-        if (auto* applet = m_panStack->panadapter(s->panId()))
+        if (auto* applet = m_panStack->panadapter(s->panId())) {
             applet->setSliceId(s->sliceId());
+            // Also update floating window title if this pan is detached
+            if (auto* fw = m_panStack->floatingWindow(s->panId())) {
+                static const char kLetters[] = "ABCD";
+                char letter = (s->sliceId() >= 0 && s->sliceId() < 4) ? kLetters[s->sliceId()] : '?';
+                fw->setTitle(QStringLiteral("Panadapter \u2014 Slice %1").arg(letter));
+            }
+        }
     }
 
     // Set initial hasTxSlice for waterfall freeze logic
@@ -4986,6 +5219,31 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
         m_radioModel.sendCommand(QString("display pan remove %1").arg(panId));
+    });
+
+    // ── Drag-out-to-float: when a drag is released outside the stack
+    //    (QDrag::exec returned IgnoreAction), float the panadapter. ────────
+    connect(applet, &PanadapterApplet::dragDroppedOutside,
+            this, [this](const QString& panId) {
+        if (m_panStack->isFloating(panId)) {
+            return;
+        }
+        PanadapterApplet* a = m_panStack->panadapter(panId);
+        if (!a) {
+            return;
+        }
+        // Count how many pans are currently docked (not floating)
+        int dockedCount = 0;
+        for (auto* ap : m_panStack->allApplets()) {
+            if (!m_panStack->isFloating(ap->panId())) {
+                dockedCount++;
+            }
+        }
+        // Don't float the last docked pan
+        if (dockedCount <= 1) {
+            return;
+        }
+        m_panStack->floatPanadapter(panId, QCursor::pos());
     });
 
     // ── User drag actions from spectrum → radio (per-pan) ──────────────────

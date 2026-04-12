@@ -1,17 +1,51 @@
 #include "PanadapterStack.h"
 #include "BandStackPanel.h"
 #include "PanadapterApplet.h"
+#include "PanDropOverlay.h"
+#include "PanFloatingWindow.h"
 #include "SpectrumWidget.h"
+#include "core/AppSettings.h"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QTimer>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QWindow>
 
 namespace AetherSDR {
+
+// Force a QRhiWidget to recreate its native surface after a cross-window
+// reparent.  QRhiWidget (with WA_NativeWindow on macOS) binds its Metal
+// surface to the top-level window; moving to a different top-level leaves
+// the surface stale.  Hiding the widget, destroying its native handle, and
+// showing it again forces Qt to create a fresh surface in the new window.
+static void resetNativeSurface(SpectrumWidget* sw)
+{
+    if (!sw) {
+        return;
+    }
+#ifdef AETHER_GPU_SPECTRUM
+    sw->hide();
+    if (QWindow* w = sw->windowHandle()) {
+        w->destroy();
+    }
+    // Re-assert the attribute so Qt creates a new native window on show()
+    sw->setAttribute(Qt::WA_NativeWindow);
+    sw->show();
+    // Defer an update so the new surface gets its first frame
+    QTimer::singleShot(50, sw, [sw]() {
+        sw->update();
+    });
+#endif
+}
 
 PanadapterStack::PanadapterStack(QWidget* parent)
     : QWidget(parent)
 {
+    setAcceptDrops(true);
+
     auto* hbox = new QHBoxLayout(this);
     hbox->setContentsMargins(0, 0, 0, 0);
     hbox->setSpacing(0);
@@ -163,11 +197,16 @@ void PanadapterStack::equalizeSizes()
 
 void PanadapterStack::rearrangeLayout(const QString& layoutId)
 {
-    // Collect applets in order
-    QList<PanadapterApplet*> applets = m_pans.values();
+    // Collect only docked applets — floating ones stay in their windows
+    QList<PanadapterApplet*> applets;
+    for (auto it = m_pans.constBegin(); it != m_pans.constEnd(); ++it) {
+        if (!m_floatingWindows.contains(it.key())) {
+            applets.append(it.value());
+        }
+    }
     if (applets.isEmpty()) return;
 
-    // Remove all applets from current splitter (don't delete them)
+    // Remove docked applets from current splitter (don't delete them)
     for (auto* a : applets)
         a->setParent(nullptr);
 
@@ -245,6 +284,13 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
 
 void PanadapterStack::removeAll()
 {
+    // Close floating windows first
+    for (auto* fw : m_floatingWindows) {
+        fw->takeApplet();  // don't let it emit dockRequested
+        delete fw;
+    }
+    m_floatingWindows.clear();
+
     qDeleteAll(m_pans);
     m_pans.clear();
     m_activePanId.clear();
@@ -255,6 +301,403 @@ void PanadapterStack::removeAll()
     m_splitter->setHandleWidth(3);
     m_splitter->setChildrenCollapsible(false);
     layout()->addWidget(m_splitter);
+}
+
+// ── Float / Dock ──────────────────────────────────────────────────────────
+
+void PanadapterStack::floatPanadapter(const QString& panId, const QPoint& globalPos)
+{
+    PanadapterApplet* applet = m_pans.value(panId, nullptr);
+    if (!applet) {
+        return;
+    }
+    if (m_floatingWindows.contains(panId)) {
+        return;  // already floating
+    }
+
+    // Remove from splitter (don't remove from m_pans — applet stays tracked)
+    applet->setParent(nullptr);
+
+    // Collapse any degenerate splitters left behind
+    collapseSplitters();
+
+    // Create floating window
+    auto* fw = new PanFloatingWindow(applet, nullptr);
+    m_floatingWindows[panId] = fw;
+
+    if (!globalPos.isNull()) {
+        fw->move(globalPos - QPoint(40, 10));
+    }
+    fw->restoreWindowGeometry();
+    fw->show();
+    fw->raise();
+
+    // Force the SpectrumWidget (QRhiWidget) to recreate its GPU surface
+    // now that it lives in a different top-level window.
+    resetNativeSurface(applet->spectrumWidget());
+
+    connect(fw, &PanFloatingWindow::dockRequested,
+            this, &PanadapterStack::dockPanadapterDefault);
+
+    // Re-equalize the remaining docked pans
+    QTimer::singleShot(0, this, [this]() { equalizeSizes(); });
+
+    saveFloatState();
+    emit panFloated(panId);
+}
+
+void PanadapterStack::dockPanadapter(const QString& panId,
+                                      const QString& targetPanId,
+                                      DropZone zone)
+{
+    PanFloatingWindow* fw = m_floatingWindows.take(panId);
+    PanadapterApplet* applet = nullptr;
+    if (fw) {
+        applet = fw->takeApplet();
+        fw->deleteLater();
+    } else {
+        // Not floating — it's a rearrange within the stack
+        applet = m_pans.value(panId, nullptr);
+        if (applet) {
+            applet->setParent(nullptr);
+            collapseSplitters();
+        }
+    }
+    if (!applet) {
+        return;
+    }
+
+    PanadapterApplet* target = m_pans.value(targetPanId, nullptr);
+    if (!target || zone == DropZone::None) {
+        // Fallback: append to root splitter
+        m_splitter->addWidget(applet);
+        applet->show();
+    } else if (zone == DropZone::Center) {
+        // Swap positions: find target in its parent splitter, replace
+        QSplitter* parentSplitter = qobject_cast<QSplitter*>(target->parentWidget());
+        if (parentSplitter) {
+            int targetIdx = parentSplitter->indexOf(target);
+            // Insert the dragged applet at the target's position
+            parentSplitter->insertWidget(targetIdx, applet);
+            applet->show();
+            // Target stays where it is (shifted by one)
+        } else {
+            m_splitter->addWidget(applet);
+            applet->show();
+        }
+    } else {
+        insertBySplit(target, applet, zone);
+        applet->show();
+    }
+
+    collapseSplitters();
+    QTimer::singleShot(0, this, [this]() { equalizeSizes(); });
+
+    // Force the SpectrumWidget to recreate its GPU surface in the new window
+    resetNativeSurface(applet->spectrumWidget());
+
+    saveFloatState();
+    emit panDocked(panId);
+}
+
+void PanadapterStack::dockPanadapterDefault(const QString& panId)
+{
+    // Dock at the bottom of the root splitter (simple re-attach)
+    PanFloatingWindow* fw = m_floatingWindows.take(panId);
+    PanadapterApplet* applet = nullptr;
+    if (fw) {
+        applet = fw->takeApplet();
+        fw->deleteLater();
+    }
+    if (!applet) {
+        return;
+    }
+
+    m_splitter->addWidget(applet);
+    applet->show();
+
+    // Force the SpectrumWidget to recreate its GPU surface in the main window
+    resetNativeSurface(applet->spectrumWidget());
+
+    QTimer::singleShot(0, this, [this]() { equalizeSizes(); });
+
+    saveFloatState();
+    emit panDocked(panId);
+}
+
+bool PanadapterStack::isFloating(const QString& panId) const
+{
+    return m_floatingWindows.contains(panId);
+}
+
+PanFloatingWindow* PanadapterStack::floatingWindow(const QString& panId) const
+{
+    return m_floatingWindows.value(panId, nullptr);
+}
+
+void PanadapterStack::saveFloatState() const
+{
+    auto& s = AppSettings::instance();
+    // Save ordinal indices of floating pans (pan IDs change between sessions)
+    QStringList indices;
+    QList<QString> allKeys = m_pans.keys();
+    for (auto it = m_floatingWindows.constBegin(); it != m_floatingWindows.constEnd(); ++it) {
+        int idx = allKeys.indexOf(it.key());
+        if (idx >= 0) {
+            indices.append(QString::number(idx));
+        }
+        it.value()->saveWindowGeometry();
+    }
+    s.setValue("PanFloatingIndices", indices.join(','));
+    s.save();
+    qDebug() << "PanadapterStack::saveFloatState: indices =" << indices
+             << "keys =" << allKeys;
+}
+
+QList<int> PanadapterStack::savedFloatingIndices() const
+{
+    const QString val = AppSettings::instance()
+        .value("PanFloatingIndices", "").toString();
+    if (val.isEmpty()) {
+        return {};
+    }
+    QList<int> result;
+    for (const QString& s : val.split(',', Qt::SkipEmptyParts)) {
+        bool ok = false;
+        int idx = s.toInt(&ok);
+        if (ok && idx >= 0) {
+            result.append(idx);
+        }
+    }
+    return result;
+}
+
+void PanadapterStack::clearSavedFloatState()
+{
+    AppSettings::instance().setValue("PanFloatingIndices", "");
+}
+
+void PanadapterStack::prepareShutdown()
+{
+    for (auto* fw : m_floatingWindows) {
+        fw->setAppShuttingDown();
+    }
+}
+
+// ── Drag-and-Drop Event Handlers ─────────────────────────────────────────
+
+void PanadapterStack::dragEnterEvent(QDragEnterEvent* ev)
+{
+    if (ev->mimeData()->hasFormat(PanadapterApplet::kMimeType)) {
+        ev->acceptProposedAction();
+    }
+}
+
+void PanadapterStack::dragMoveEvent(QDragMoveEvent* ev)
+{
+    if (!ev->mimeData()->hasFormat(PanadapterApplet::kMimeType)) {
+        return;
+    }
+    ev->acceptProposedAction();
+
+    PanadapterApplet* target = appletAt(ev->position().toPoint());
+    if (!target) {
+        hideDropOverlay();
+        return;
+    }
+
+    // Don't show overlay on the dragged applet itself
+    const QString draggedId = QString::fromUtf8(
+        ev->mimeData()->data(PanadapterApplet::kMimeType));
+    if (target->panId() == draggedId) {
+        hideDropOverlay();
+        return;
+    }
+
+    // Create or reposition overlay
+    if (!m_dropOverlay) {
+        m_dropOverlay = new PanDropOverlay(this);
+    }
+
+    // Position overlay to cover the target applet
+    const QPoint targetTopLeft = target->mapTo(this, QPoint(0, 0));
+    m_dropOverlay->setGeometry(targetTopLeft.x(), targetTopLeft.y(),
+                                target->width(), target->height());
+    m_dropOverlay->raise();
+    m_dropOverlay->show();
+
+    // Determine which zone the cursor is in
+    const QPoint localInOverlay = ev->position().toPoint() - targetTopLeft;
+    DropZone zone = m_dropOverlay->zoneAt(localInOverlay);
+    m_dropOverlay->setActiveZone(zone);
+    m_dropTargetPanId = target->panId();
+}
+
+void PanadapterStack::dragLeaveEvent(QDragLeaveEvent* /*ev*/)
+{
+    hideDropOverlay();
+
+    // If the drag left the PanadapterStack entirely, float the panadapter.
+    // We use a short timer so that spurious leave events (e.g. passing over
+    // a splitter handle) don't trigger a float.
+    // Note: The actual float is triggered from the QDrag result in PanadapterApplet.
+}
+
+void PanadapterStack::dropEvent(QDropEvent* ev)
+{
+    hideDropOverlay();
+
+    if (!ev->mimeData()->hasFormat(PanadapterApplet::kMimeType)) {
+        return;
+    }
+
+    const QString draggedId = QString::fromUtf8(
+        ev->mimeData()->data(PanadapterApplet::kMimeType));
+
+    PanadapterApplet* target = appletAt(ev->position().toPoint());
+    if (!target || target->panId() == draggedId) {
+        // Dropped on empty space or self — if floating, dock at bottom
+        if (m_floatingWindows.contains(draggedId)) {
+            dockPanadapterDefault(draggedId);
+        }
+        ev->acceptProposedAction();
+        return;
+    }
+
+    // Determine drop zone
+    const QPoint targetTopLeft = target->mapTo(this, QPoint(0, 0));
+    const QPoint localInTarget = ev->position().toPoint() - targetTopLeft;
+
+    // Use a temporary overlay calc to get the zone
+    PanDropOverlay tempOverlay;
+    tempOverlay.resize(target->size());
+    DropZone zone = tempOverlay.zoneAt(localInTarget);
+
+    dockPanadapter(draggedId, target->panId(), zone);
+
+    ev->acceptProposedAction();
+}
+
+// ── Internal Helpers ─────────────────────────────────────────────────────
+
+PanadapterApplet* PanadapterStack::appletAt(const QPoint& localPos) const
+{
+    for (auto it = m_pans.constBegin(); it != m_pans.constEnd(); ++it) {
+        PanadapterApplet* applet = it.value();
+        if (m_floatingWindows.contains(it.key())) {
+            continue;  // skip floating applets
+        }
+        if (!applet->isVisible()) {
+            continue;
+        }
+        const QRect r(applet->mapTo(const_cast<PanadapterStack*>(this), QPoint(0, 0)),
+                      applet->size());
+        if (r.contains(localPos)) {
+            return applet;
+        }
+    }
+    return nullptr;
+}
+
+void PanadapterStack::insertBySplit(QWidget* target, QWidget* inserted, DropZone zone)
+{
+    QSplitter* parentSplitter = qobject_cast<QSplitter*>(target->parentWidget());
+    if (!parentSplitter) {
+        // Target is directly in root — use root splitter
+        parentSplitter = m_splitter;
+    }
+
+    const int targetIdx = parentSplitter->indexOf(target);
+
+    // Determine orientation needed for this split
+    Qt::Orientation needed = Qt::Vertical;
+    if (zone == DropZone::Left || zone == DropZone::Right) {
+        needed = Qt::Horizontal;
+    }
+
+    // If parent splitter already has the right orientation, just insert adjacent
+    if (parentSplitter->orientation() == needed) {
+        if (zone == DropZone::Top || zone == DropZone::Left) {
+            parentSplitter->insertWidget(targetIdx, inserted);
+        } else {
+            parentSplitter->insertWidget(targetIdx + 1, inserted);
+        }
+        return;
+    }
+
+    // Need to wrap target + inserted in a new sub-splitter with the needed orientation
+    auto* newSplitter = new QSplitter(needed);
+    newSplitter->setHandleWidth(3);
+    newSplitter->setChildrenCollapsible(false);
+
+    // Replace target with the new splitter in the parent
+    parentSplitter->insertWidget(targetIdx, newSplitter);
+
+    // Move target into the new splitter
+    if (zone == DropZone::Top || zone == DropZone::Left) {
+        newSplitter->addWidget(inserted);
+        newSplitter->addWidget(target);
+    } else {
+        newSplitter->addWidget(target);
+        newSplitter->addWidget(inserted);
+    }
+
+    // Equalize the new sub-splitter
+    const int total = (needed == Qt::Horizontal) ? newSplitter->width() : newSplitter->height();
+    newSplitter->setSizes({total / 2, total / 2});
+}
+
+void PanadapterStack::collapseSplitters()
+{
+    collapseSplittersRecursive(m_splitter);
+}
+
+void PanadapterStack::collapseSplittersRecursive(QSplitter* splitter)
+{
+    if (!splitter) {
+        return;
+    }
+
+    // First recurse into nested splitters
+    for (int i = splitter->count() - 1; i >= 0; --i) {
+        if (auto* nested = qobject_cast<QSplitter*>(splitter->widget(i))) {
+            collapseSplittersRecursive(nested);
+        }
+    }
+
+    // If this splitter has exactly one child, promote it to the parent
+    if (splitter->count() == 1 && splitter != m_splitter) {
+        QWidget* child = splitter->widget(0);
+        QSplitter* parentSplitter = qobject_cast<QSplitter*>(splitter->parentWidget());
+        if (parentSplitter) {
+            int idx = parentSplitter->indexOf(splitter);
+            child->setParent(nullptr);
+            parentSplitter->insertWidget(idx, child);
+            splitter->deleteLater();
+        }
+    }
+
+    // If root splitter has exactly one child that is itself a splitter,
+    // promote that splitter's children into root
+    if (splitter == m_splitter && splitter->count() == 1) {
+        if (auto* onlyChild = qobject_cast<QSplitter*>(splitter->widget(0))) {
+            // Move all children of onlyChild into root
+            while (onlyChild->count() > 0) {
+                QWidget* w = onlyChild->widget(0);
+                m_splitter->addWidget(w);
+            }
+            m_splitter->setOrientation(onlyChild->orientation());
+            onlyChild->deleteLater();
+        }
+    }
+}
+
+void PanadapterStack::hideDropOverlay()
+{
+    if (m_dropOverlay) {
+        m_dropOverlay->hide();
+    }
+    m_dropTargetPanId.clear();
 }
 
 void PanadapterStack::applyLayout(const QString& layoutId, const QStringList& panIds)
