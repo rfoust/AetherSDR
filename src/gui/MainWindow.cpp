@@ -6227,6 +6227,7 @@ void MainWindow::registerShortcutActions()
             if (s) s->setLocked(!s->isLocked());
         });
 
+    static constexpr double kPanZoomFactor = 1.5;
     auto zoomActivePanadapter = [this](double factor) {
         if (!m_radioModel.isConnected()) {
             return;
@@ -6322,9 +6323,9 @@ void MainWindow::registerShortcutActions()
                 QString("slice set %1 segment_zoom=1").arg(s->sliceId()));
         });
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
-        QKeySequence(Qt::Key_Equal), [zoomActivePanadapter]() { zoomActivePanadapter(1.0 / 1.5); });
+        QKeySequence(Qt::Key_Equal), [zoomActivePanadapter]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
     m_shortcutManager.registerAction("pan_zoom_out", "Panadapter Zoom Out", "Display",
-        QKeySequence(Qt::Key_Minus), [zoomActivePanadapter]() { zoomActivePanadapter(1.5); });
+        QKeySequence(Qt::Key_Minus), [zoomActivePanadapter]() { zoomActivePanadapter(kPanZoomFactor); });
     m_shortcutManager.registerAction("open_memories", "Open Memories Dialog", "Display",
         QKeySequence(Qt::Key_Slash), [this]() { showMemoryDialog(); });
 
