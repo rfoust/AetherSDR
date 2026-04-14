@@ -1788,22 +1788,7 @@ MainWindow::MainWindow(QWidget* parent)
     }
     m_appletPanel->phoneCwApplet()->setTransmitModel(&m_radioModel.transmitModel());
 
-    // ── CW zero-beat: pitch tracking + VFO adjustment ───────────────────────
-    connect(&m_cwDecoder, &CwDecoder::statsUpdated,
-            m_appletPanel->phoneCwApplet(), [this](float pitchHz, float) {
-        m_appletPanel->phoneCwApplet()->setCwDetectedPitch(pitchHz);
-    });
 
-    connect(m_appletPanel->phoneCwApplet(), &PhoneCwApplet::zeroBeatRequested,
-            this, [this]() {
-        SliceModel* slice = activeSlice();
-        if (!slice) return;
-        float detected = m_cwDecoder.estimatedPitch();
-        if (detected <= 0.0f) return;
-        int configured = m_radioModel.transmitModel().cwPitch();
-        double offsetMhz = (detected - configured) / 1.0e6;
-        slice->setFrequency(slice->frequency() + offsetMhz);
-    });
 
     // ── PHNE applet: VOX + CW controls ──────────────────────────────────────
     m_appletPanel->phoneApplet()->setTransmitModel(&m_radioModel.transmitModel());
@@ -4697,6 +4682,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
                        || model.contains("6700") || model.contains("8600")
                        || model.contains("AU-520");
         vfo->setDiversityAllowed(divAllowed);
+        const QString& sub = m_radioModel.licenseSubscription();
+        bool hasPlus = sub.contains("SmartSDR+");
+        vfo->setSmartSdrPlus(hasPlus);
     }
 
     // Feed S-meter per-slice — only this VFO's slice level
@@ -5795,6 +5783,15 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(w, &VfoWidget::autotuneOnceRequested, this, [this, sliceId]() {
         if (m_radioModel.slice(sliceId))
             m_radioModel.cwAutoTuneOnce(sliceId);
+    });
+    connect(w, &VfoWidget::zeroBeatRequested, this, [this]() {
+        SliceModel* slice = activeSlice();
+        if (!slice) return;
+        float detected = m_cwDecoder.estimatedPitch();
+        if (detected <= 0.0f) return;
+        int configured = m_radioModel.transmitModel().cwPitch();
+        double offsetMhz = (detected - configured) / 1.0e6;
+        slice->setFrequency(slice->frequency() + offsetMhz);
     });
     connect(w, &VfoWidget::addSpotRequested, this, [this](double freqMhz) {
         if (auto* sw = spectrum()) sw->showAddSpotDialog(freqMhz);

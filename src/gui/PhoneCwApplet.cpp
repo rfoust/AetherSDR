@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QPainter>
 #include <QDir>
 #include <QStandardPaths>
@@ -519,18 +520,6 @@ void PhoneCwApplet::buildCwPanel()
         m_iambicBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
         row->addWidget(m_iambicBtn);
 
-        m_zeroBtn = new QPushButton("Zero");
-        m_zeroBtn->setFixedHeight(22);
-        m_zeroBtn->setEnabled(false);
-        m_zeroBtn->setAccessibleName("CW zero beat");
-        m_zeroBtn->setAccessibleDescription(
-            "Adjust VFO to zero-beat the incoming CW signal");
-        m_zeroBtn->setToolTip("Zero-beat incoming CW signal");
-        m_zeroBtn->setStyleSheet(kButtonBase);
-        connect(m_zeroBtn, &QPushButton::clicked, this,
-                &PhoneCwApplet::zeroBeatRequested);
-        row->addWidget(m_zeroBtn);
-
         row->addStretch();
 
         // Pitch: label + < value > stepper (inset display matching RIT/XIT style)
@@ -583,6 +572,7 @@ void PhoneCwApplet::buildCwPanel()
 
         vbox->addLayout(row);
     }
+
 }
 
 // ── Mode switching ───────────────────────────────────────────────────────────
@@ -742,10 +732,6 @@ void PhoneCwApplet::updateAlc(float alc)
     m_alcGauge->setValue(alc);
 }
 
-void PhoneCwApplet::setCwDetectedPitch(float pitchHz)
-{
-    // Enable the Zero button only when the decoder has a valid pitch estimate.
-    m_zeroBtn->setEnabled(pitchHz > 0.0f);
-}
+
 
 } // namespace AetherSDR

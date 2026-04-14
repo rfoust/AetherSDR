@@ -2928,6 +2928,7 @@ void VfoWidget::rebuildFilterButtons()
     // Remove autotune buttons if they exist (they'll be re-added for CW)
     if (m_autotuneOnceBtn) { delete m_autotuneOnceBtn; m_autotuneOnceBtn = nullptr; }
     if (m_autotuneLoopBtn) { delete m_autotuneLoopBtn; m_autotuneLoopBtn = nullptr; }
+    if (m_zeroBeatBtn) { delete m_zeroBeatBtn; m_zeroBeatBtn = nullptr; }
 
     for (int i = 0; i < m_filterWidths.size(); ++i) {
         const int w = m_filterWidths[i];
@@ -2990,22 +2991,32 @@ void VfoWidget::rebuildFilterButtons()
             "QPushButton:pressed { background: #00607a; }"
             "QPushButton:checked { background: #00607a; color: #e0f0ff; border-color: #00b4d8; }";
 
-        m_autotuneOnceBtn = new QPushButton("Once");
-        m_autotuneOnceBtn->setFixedHeight(26);
-        m_autotuneOnceBtn->setStyleSheet(btnStyle);
-        connect(m_autotuneOnceBtn, &QPushButton::clicked, this, [this]() {
-            emit autotuneOnceRequested();
-        });
-        hbox->addWidget(m_autotuneOnceBtn, 1);
+        if (m_hasSmartSdrPlus) {
+            m_autotuneOnceBtn = new QPushButton("Once");
+            m_autotuneOnceBtn->setFixedHeight(26);
+            m_autotuneOnceBtn->setStyleSheet(btnStyle);
+            connect(m_autotuneOnceBtn, &QPushButton::clicked, this, [this]() {
+                emit autotuneOnceRequested();
+            });
+            hbox->addWidget(m_autotuneOnceBtn, 1);
 
-        m_autotuneLoopBtn = new QPushButton("Loop");
-        m_autotuneLoopBtn->setCheckable(true);
-        m_autotuneLoopBtn->setFixedHeight(26);
-        m_autotuneLoopBtn->setStyleSheet(btnStyle);
-        connect(m_autotuneLoopBtn, &QPushButton::toggled, this, [this](bool on) {
-            emit autotuneRequested(on);
-        });
-        hbox->addWidget(m_autotuneLoopBtn, 1);
+            m_autotuneLoopBtn = new QPushButton("Loop");
+            m_autotuneLoopBtn->setCheckable(true);
+            m_autotuneLoopBtn->setFixedHeight(26);
+            m_autotuneLoopBtn->setStyleSheet(btnStyle);
+            connect(m_autotuneLoopBtn, &QPushButton::toggled, this, [this](bool on) {
+                emit autotuneRequested(on);
+            });
+            hbox->addWidget(m_autotuneLoopBtn, 1);
+        } else {
+            m_zeroBeatBtn = new QPushButton("Zero Beat");
+            m_zeroBeatBtn->setFixedHeight(26);
+            m_zeroBeatBtn->setStyleSheet(btnStyle);
+            connect(m_zeroBeatBtn, &QPushButton::clicked, this, [this]() {
+                emit zeroBeatRequested();
+            });
+            hbox->addWidget(m_zeroBeatBtn, 1);
+        }
 
         m_filterGrid->addWidget(container, row, 0, 1, 4);
     }
