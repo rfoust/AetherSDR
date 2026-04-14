@@ -645,6 +645,9 @@ private:
 #endif
         update();
     }
+
+    void reprojectWaterfall(double oldCenterMhz, double oldBandwidthMhz,
+                            double newCenterMhz, double newBandwidthMhz);
 };
 
 } // namespace AetherSDR
