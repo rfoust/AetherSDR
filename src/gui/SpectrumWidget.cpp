@@ -484,6 +484,173 @@ void SpectrumWidget::resetWfTimeScale() {
     m_wfPrevTimecodeMs = 0;
     m_wfCalibrationCount = 0;
     m_wfTimeScaleLocked = false;
+    ensureWaterfallHistory();
+}
+
+int SpectrumWidget::waterfallHistoryCapacityRows() const
+{
+    const int msPerRow = std::max(1, m_wfLineDuration);
+    return static_cast<int>((kWaterfallHistoryMs + msPerRow - 1) / msPerRow);
+}
+
+int SpectrumWidget::maxWaterfallHistoryOffsetRows() const
+{
+    return std::max(0, m_wfHistoryRowCount - m_waterfall.height());
+}
+
+int SpectrumWidget::historyRowIndexForAge(int ageRows) const
+{
+    if (m_waterfallHistory.isNull() || ageRows < 0 || ageRows >= m_wfHistoryRowCount) {
+        return -1;
+    }
+    return (m_wfHistoryWriteRow + ageRows) % m_waterfallHistory.height();
+}
+
+QString SpectrumWidget::pausedTimeLabelForAge(int ageRows) const
+{
+    const int rowIndex = historyRowIndexForAge(ageRows);
+    if (rowIndex < 0 || rowIndex >= m_wfHistoryTimestamps.size()) {
+        return QString();
+    }
+
+    const qint64 timestampMs = m_wfHistoryTimestamps[rowIndex];
+    if (timestampMs <= 0) {
+        return QString();
+    }
+
+    const QDateTime utc = QDateTime::fromMSecsSinceEpoch(timestampMs, QTimeZone::utc());
+    return "-" + utc.toString("HH:mm:ssZ");
+}
+
+void SpectrumWidget::ensureWaterfallHistory()
+{
+    if (m_waterfall.isNull()) {
+        return;
+    }
+
+    const QSize desiredSize(m_waterfall.width(), waterfallHistoryCapacityRows());
+    if (desiredSize.width() <= 0 || desiredSize.height() <= 0) {
+        return;
+    }
+
+    if (m_waterfallHistory.size() == desiredSize) {
+        return;
+    }
+
+    m_waterfallHistory = QImage(desiredSize, QImage::Format_RGB32);
+    m_waterfallHistory.fill(Qt::black);
+    m_wfHistoryTimestamps = QVector<qint64>(desiredSize.height(), 0);
+    m_wfHistoryWriteRow = 0;
+    m_wfHistoryRowCount = 0;
+    m_wfHistoryOffsetRows = 0;
+    m_wfLive = true;
+}
+
+void SpectrumWidget::appendVisibleRow(const QRgb* rowData)
+{
+    if (m_waterfall.isNull() || rowData == nullptr) {
+        return;
+    }
+
+    const int h = m_waterfall.height();
+    if (h <= 0) {
+        return;
+    }
+
+    m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
+    auto* row = reinterpret_cast<QRgb*>(m_waterfall.bits() + m_wfWriteRow * m_waterfall.bytesPerLine());
+    std::memcpy(row, rowData, m_waterfall.width() * sizeof(QRgb));
+}
+
+void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
+{
+    ensureWaterfallHistory();
+    if (m_waterfallHistory.isNull() || rowData == nullptr) {
+        return;
+    }
+
+    const int h = m_waterfallHistory.height();
+    m_wfHistoryWriteRow = (m_wfHistoryWriteRow - 1 + h) % h;
+    auto* row = reinterpret_cast<QRgb*>(m_waterfallHistory.bits()
+                                        + m_wfHistoryWriteRow * m_waterfallHistory.bytesPerLine());
+    std::memcpy(row, rowData, m_waterfallHistory.width() * sizeof(QRgb));
+    if (m_wfHistoryWriteRow >= 0 && m_wfHistoryWriteRow < m_wfHistoryTimestamps.size()) {
+        m_wfHistoryTimestamps[m_wfHistoryWriteRow] = timestampMs;
+    }
+    if (m_wfHistoryRowCount < h) {
+        ++m_wfHistoryRowCount;
+    }
+    if (!m_wfLive) {
+        m_wfHistoryOffsetRows = std::min(m_wfHistoryOffsetRows + 1, maxWaterfallHistoryOffsetRows());
+    }
+}
+
+void SpectrumWidget::rebuildWaterfallViewport()
+{
+    if (m_waterfall.isNull()) {
+        return;
+    }
+
+    m_wfHistoryOffsetRows = std::clamp(m_wfHistoryOffsetRows, 0, maxWaterfallHistoryOffsetRows());
+    m_waterfall.fill(Qt::black);
+    m_wfWriteRow = 0;
+
+    if (m_waterfallHistory.isNull()) {
+        update();
+        return;
+    }
+
+    const int rowWidthBytes = m_waterfall.width() * static_cast<int>(sizeof(QRgb));
+    for (int y = 0; y < m_waterfall.height(); ++y) {
+        const int rowIndex = historyRowIndexForAge(m_wfHistoryOffsetRows + y);
+        if (rowIndex < 0) {
+            break;
+        }
+        const QRgb* src = reinterpret_cast<const QRgb*>(
+            m_waterfallHistory.constScanLine(rowIndex));
+        auto* dst = reinterpret_cast<QRgb*>(m_waterfall.scanLine(y));
+        std::memcpy(dst, src, rowWidthBytes);
+    }
+
+#ifdef AETHER_GPU_SPECTRUM
+    m_wfTexFullUpload = true;
+#endif
+    update();
+}
+
+void SpectrumWidget::setWaterfallLive(bool live)
+{
+    if (m_wfLive == live) {
+        return;
+    }
+    if (live) {
+        m_wfHistoryOffsetRows = 0;
+    }
+    m_wfLive = live;
+    rebuildWaterfallViewport();
+    markOverlayDirty();
+}
+
+int SpectrumWidget::waterfallStripWidth() const
+{
+    return m_wfLive ? DBM_STRIP_W : 72;
+}
+
+QRect SpectrumWidget::waterfallTimeScaleRect(const QRect& wfRect) const
+{
+    const int stripWidth = waterfallStripWidth();
+    const int stripX = wfRect.right() - stripWidth + 1;
+    return QRect(stripX, wfRect.top(), stripWidth, wfRect.height());
+}
+
+QRect SpectrumWidget::waterfallLiveButtonRect(const QRect& wfRect) const
+{
+    const QRect strip = waterfallTimeScaleRect(wfRect);
+    const int buttonW = 32;
+    const int buttonH = 16;
+    const int buttonX = strip.right() - buttonW - 2;
+    const int buttonY = wfRect.top() - FREQ_SCALE_H + 2;
+    return QRect(buttonX, buttonY, buttonW, buttonH);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -492,9 +659,18 @@ void SpectrumWidget::clearDisplay()
 {
     m_bins.clear();
     m_smoothed.clear();
-    if (!m_waterfall.isNull())
+    if (!m_waterfall.isNull()) {
         m_waterfall.fill(Qt::black);
+    }
+    if (!m_waterfallHistory.isNull()) {
+        m_waterfallHistory.fill(Qt::black);
+    }
+    std::fill(m_wfHistoryTimestamps.begin(), m_wfHistoryTimestamps.end(), 0);
     m_wfWriteRow = 0;
+    m_wfHistoryWriteRow = 0;
+    m_wfHistoryRowCount = 0;
+    m_wfHistoryOffsetRows = 0;
+    m_wfLive = true;
     markOverlayDirty();
 }
 
@@ -514,16 +690,7 @@ void SpectrumWidget::resetGpuResources()
 void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidthMhz,
                                         double newCenterMhz, double newBandwidthMhz)
 {
-    if (m_waterfall.isNull()) {
-        return;
-    }
     if (oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
-        return;
-    }
-
-    const int imageWidth = m_waterfall.width();
-    const int imageHeight = m_waterfall.height();
-    if (imageWidth <= 0 || imageHeight <= 0) {
         return;
     }
 
@@ -534,25 +701,40 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
     const double overlapStartMhz = std::max(oldStartMhz, newStartMhz);
     const double overlapEndMhz = std::min(oldEndMhz, newEndMhz);
 
-    QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
-    reprojected.fill(Qt::black);
-
-    if (overlapEndMhz > overlapStartMhz) {
-        const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
-        const double srcRight = (overlapEndMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
-        const double dstLeft = (overlapStartMhz - newStartMhz) / newBandwidthMhz * imageWidth;
-        const double dstRight = (overlapEndMhz - newStartMhz) / newBandwidthMhz * imageWidth;
-
-        if (srcRight > srcLeft && dstRight > dstLeft) {
-            QPainter painter(&reprojected);
-            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-            painter.drawImage(QRectF(dstLeft, 0.0, dstRight - dstLeft, imageHeight),
-                              m_waterfall,
-                              QRectF(srcLeft, 0.0, srcRight - srcLeft, imageHeight));
+    auto reprojectImage = [&](QImage& image) {
+        if (image.isNull()) {
+            return;
         }
-    }
 
-    m_waterfall = std::move(reprojected);
+        const int imageWidth = image.width();
+        const int imageHeight = image.height();
+        if (imageWidth <= 0 || imageHeight <= 0) {
+            return;
+        }
+
+        QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
+        reprojected.fill(Qt::black);
+
+        if (overlapEndMhz > overlapStartMhz) {
+            const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+            const double srcRight = (overlapEndMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+            const double dstLeft = (overlapStartMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+            const double dstRight = (overlapEndMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+
+            if (srcRight > srcLeft && dstRight > dstLeft) {
+                QPainter painter(&reprojected);
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                painter.drawImage(QRectF(dstLeft, 0.0, dstRight - dstLeft, imageHeight),
+                                  image,
+                                  QRectF(srcLeft, 0.0, srcRight - srcLeft, imageHeight));
+            }
+        }
+
+        image = std::move(reprojected);
+    };
+
+    reprojectImage(m_waterfall);
+    reprojectImage(m_waterfallHistory);
     m_prevTileScanline.clear();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
@@ -866,10 +1048,6 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     if (h <= 1) return;
     rowsToPush = std::min(rowsToPush, h - 1);
 
-    // Ring buffer: write new row at m_wfWriteRow, no memmove (#391)
-    uchar* bits = m_waterfall.bits();
-    const qsizetype bpl = m_waterfall.bytesPerLine();
-
     // Render the tile row into a temporary scanline.
     // Per FlexRadio community guidance: tiles extend BEYOND the panadapter edges.
     // For each display pixel, calculate its frequency, then find the corresponding
@@ -930,11 +1108,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
             ++m_wfBlankerRingCount;
     }
 
-    // Write rows into ring buffer (no memmove)
+    // Write rows into history + visible viewport.
     const bool canInterp = (m_prevTileScanline.size() == destWidth && rowsToPush > 1);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     for (int r = 0; r < rowsToPush; ++r) {
-        m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
-        auto* row = reinterpret_cast<QRgb*>(bits + m_wfWriteRow * bpl);
+        QVector<QRgb> interpolatedRow(destWidth, qRgb(0, 0, 0));
         if (canInterp) {
             // t=0 at row 0 (current), t=1 at last row (previous)
             const float t = static_cast<float>(r) / rowsToPush;
@@ -944,10 +1122,17 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
                 const int cr = qRed(c)   + static_cast<int>(t * (qRed(p)   - qRed(c)));
                 const int cg = qGreen(c) + static_cast<int>(t * (qGreen(p) - qGreen(c)));
                 const int cb = qBlue(c)  + static_cast<int>(t * (qBlue(p)  - qBlue(c)));
-                row[x] = qRgb(cr, cg, cb);
+                interpolatedRow[x] = qRgb(cr, cg, cb);
             }
         } else {
-            std::memcpy(row, scanline.constData(), destWidth * sizeof(QRgb));
+            interpolatedRow = scanline;
+        }
+
+        appendHistoryRow(interpolatedRow.constData(), nowMs);
+        if (m_wfLive) {
+            appendVisibleRow(interpolatedRow.constData());
+        } else {
+            rebuildWaterfallViewport();
         }
     }
     m_prevTileScanline = scanline;
@@ -1038,6 +1223,13 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     // Click on the freq scale bar → start bandwidth drag
     const int scaleY = specH + DIVIDER_H;
     if (y >= scaleY && y < scaleY + FREQ_SCALE_H) {
+        const QRect wfRect(0, scaleY + FREQ_SCALE_H, width(), height() - (scaleY + FREQ_SCALE_H));
+        if (waterfallLiveButtonRect(wfRect).contains(ev->position().toPoint())) {
+            setWaterfallLive(true);
+            ev->accept();
+            return;
+        }
+
         m_draggingBandwidth = true;
         m_bwDragStartX = static_cast<int>(ev->position().x());
         m_bwDragStartBw = m_bandwidthMhz;
@@ -1051,6 +1243,19 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     // Left-click in waterfall area → start pan drag (tune on double-click only)
     const int wfY = scaleY + FREQ_SCALE_H;
     if (y >= wfY && ev->button() == Qt::LeftButton) {
+        const QRect wfRect(0, wfY, width(), height() - wfY);
+        const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
+        const QPoint pos = ev->position().toPoint();
+
+        if (timeScaleRect.contains(pos)) {
+            m_draggingTimeScale = true;
+            m_timeScaleDragStartY = y;
+            m_timeScaleDragStartOffsetRows = m_wfHistoryOffsetRows;
+            setCursor(Qt::SizeVerCursor);
+            ev->accept();
+            return;
+        }
+
         m_draggingPan = true;
         m_panDragStartX = static_cast<int>(ev->position().x());
         m_panDragStartCenter = m_centerMhz;
@@ -1325,8 +1530,6 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 m_draggingFilter = loHit ? FilterEdge::Low : FilterEdge::High;
 
             // Store anchor offset so the edge doesn't snap to cursor (#764)
-            const double mhz = xToMhz(mx);
-            const int mouseHz = static_cast<int>(std::round((mhz - ao->freqMhz) * 1.0e6));
             const int edgeHz = (m_draggingFilter == FilterEdge::Low) ? ao->filterLowHz : ao->filterHighHz;
             m_filterDragStartX = mx;
             m_filterDragStartHz = edgeHz;
@@ -1360,6 +1563,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 {
     const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
     const int contentH = height() - chromeH;
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
     const int y = static_cast<int>(ev->position().y());
 
     // TNF drag
@@ -1390,6 +1594,10 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
             }
             m_waterfall = std::move(newWf);
             m_wfWriteRow = 0;
+            ensureWaterfallHistory();
+            if (m_wfHistoryRowCount > 0) {
+                rebuildWaterfallViewport();
+            }
         }
         markOverlayDirty();
         ev->accept();
@@ -1398,12 +1606,37 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 
     if (m_draggingDbm) {
         const int dy = y - m_dbmDragStartY;
-        const int specH = static_cast<int>(contentH * m_spectrumFrac);
         // Convert pixel drag to dB: full FFT height = full dynamic range
         const float deltaDb = (static_cast<float>(dy) / specH) * m_dynamicRange;
         m_refLevel = m_dbmDragStartRef + deltaDb;
         markOverlayDirty();
         emit dbmRangeChangeRequested(m_refLevel - m_dynamicRange, m_refLevel);
+        ev->accept();
+        return;
+    }
+
+    if (m_draggingTimeScale) {
+        const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+        const QRect wfRect(0, wfY, width(), height() - wfY);
+        const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
+        const int dragHeight = std::max(1, timeScaleRect.height());
+        const int maxOffset = maxWaterfallHistoryOffsetRows();
+        const int dy = y - m_timeScaleDragStartY;
+        const int deltaRows = (maxOffset > 0)
+            ? static_cast<int>(std::round((static_cast<double>(dy) / dragHeight) * maxOffset))
+            : 0;
+        const int newOffset = std::clamp(m_timeScaleDragStartOffsetRows + deltaRows, 0, maxOffset);
+
+        if (newOffset != m_wfHistoryOffsetRows) {
+            m_wfHistoryOffsetRows = newOffset;
+            if (newOffset > 0) {
+                m_wfLive = false;
+            }
+            rebuildWaterfallViewport();
+            markOverlayDirty();
+        }
+
+        setCursor(Qt::SizeVerCursor);
         ev->accept();
         return;
     }
@@ -1465,13 +1698,26 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
 
     // Update cursor based on hover position
-    const int specH = static_cast<int>(contentH * m_spectrumFrac);
     const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
 
     if (y >= specH && y < specH + DIVIDER_H) {
         setCursor(Qt::SplitVCursor);
     } else if (y >= specH + DIVIDER_H && y < wfY) {
-        setCursor(Qt::SizeHorCursor);
+        const QRect wfRect(0, wfY, width(), height() - wfY);
+        if (waterfallLiveButtonRect(wfRect).contains(ev->position().toPoint())) {
+            setCursor(Qt::PointingHandCursor);
+        } else {
+            setCursor(Qt::SizeHorCursor);
+        }
+    } else if (y >= wfY) {
+        const QRect wfRect(0, wfY, width(), height() - wfY);
+        const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
+        const QPoint pos = ev->position().toPoint();
+        if (timeScaleRect.contains(pos)) {
+            setCursor(Qt::SizeVerCursor);
+        } else {
+            setCursor(Qt::CrossCursor);
+        }
     } else if (y < specH) {
         const int mx = static_cast<int>(ev->position().x());
         const QPoint pos(mx, y);
@@ -1570,8 +1816,6 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 if (!foundCursor) setCursor(Qt::CrossCursor);
             }
         }
-    } else {
-        setCursor(Qt::CrossCursor);
     }
 
     // Track cursor position for frequency label overlay and tune guides
@@ -1633,6 +1877,12 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingDbm) {
         m_draggingDbm = false;
+        setCursor(Qt::CrossCursor);
+        ev->accept();
+        return;
+    }
+    if (m_draggingTimeScale) {
+        m_draggingTimeScale = false;
         setCursor(Qt::CrossCursor);
         ev->accept();
         return;
@@ -1773,9 +2023,10 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
     const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
     const int y = static_cast<int>(ev->position().y());
     const int mx = static_cast<int>(ev->position().x());
+    const int rightStripW = (y >= wfY) ? waterfallStripWidth() : DBM_STRIP_W;
 
     // Consume double-clicks on the dBm and time strips
-    if (mx >= width() - DBM_STRIP_W) {
+    if (mx >= width() - rightStripW) {
         ev->accept();
         return;
     }
@@ -1874,6 +2125,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
     const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
     const int contentH2 = height() - chromeH;
     const int specH2 = static_cast<int>(contentH2 * m_spectrumFrac);
+    const int wfY = specH2 + DIVIDER_H + FREQ_SCALE_H;
     const int chromeTop = specH2;
     const int chromeBot = specH2 + chromeH;
     if (ev->position().y() >= chromeTop && ev->position().y() < chromeBot) {
@@ -1882,7 +2134,8 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
     }
     // Consume wheel events on the dBm / time scale strips
     const int mx = static_cast<int>(ev->position().x());
-    if (mx >= width() - DBM_STRIP_W) {
+    const int rightStripW = (ev->position().y() >= wfY) ? waterfallStripWidth() : DBM_STRIP_W;
+    if (mx >= width() - rightStripW) {
         ev->accept();
         return;
     }
@@ -1958,6 +2211,10 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
         }
         m_waterfall = std::move(newWf);
         m_wfWriteRow = 0;
+        ensureWaterfallHistory();
+        if (m_wfHistoryRowCount > 0) {
+            rebuildWaterfallViewport();
+        }
     }
 
     // Position GPU renderer to cover FFT + waterfall area
@@ -2039,20 +2296,21 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     const int h = m_waterfall.height();
     if (h <= 1) return;
 
-    // Ring buffer: write new row at m_wfWriteRow, no memmove (#391)
-    uchar* bits = m_waterfall.bits();
-    const qsizetype bpl = m_waterfall.bytesPerLine();
-
-    m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
-    auto* row = reinterpret_cast<QRgb*>(bits + m_wfWriteRow * bpl);
-
     Q_UNUSED(tileLowMhz);
     Q_UNUSED(tileHighMhz);
 
+    QVector<QRgb> scanline(destWidth, qRgb(0, 0, 0));
     for (int x = 0; x < destWidth; ++x) {
         const int binIdx = x * bins.size() / destWidth;
         const float dbm = (binIdx >= 0 && binIdx < bins.size()) ? bins[binIdx] : m_wfMinDbm;
-        row[x] = dbmToRgb(dbm);
+        scanline[x] = dbmToRgb(dbm);
+    }
+
+    appendHistoryRow(scanline.constData(), QDateTime::currentMSecsSinceEpoch());
+    if (m_wfLive) {
+        appendVisibleRow(scanline.constData());
+    } else {
+        rebuildWaterfallViewport();
     }
 }
 
@@ -4027,8 +4285,8 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
 
 void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
 {
-    const int stripX = wfRect.right() - DBM_STRIP_W + 1;
-    const QRect strip(stripX, wfRect.top(), DBM_STRIP_W, wfRect.height());
+    const QRect strip = waterfallTimeScaleRect(wfRect);
+    const int stripX = strip.x();
 
     // Semi-opaque background
     p.fillRect(strip, QColor(0x0a, 0x0a, 0x18, 220));
@@ -4037,14 +4295,28 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
     p.setPen(QColor(0x30, 0x40, 0x50));
     p.drawLine(stripX, wfRect.top(), stripX, wfRect.bottom());
 
+    const QRect liveRect = waterfallLiveButtonRect(wfRect);
+    p.setPen(QColor(0x40, 0x50, 0x60));
+    p.setBrush(m_wfLive ? QColor(0x45, 0x45, 0x45) : QColor(0xc0, 0x20, 0x20));
+    p.drawRoundedRect(liveRect, 3, 3);
+
+    QFont liveFont = p.font();
+    liveFont.setPointSize(7);
+    liveFont.setBold(true);
+    p.setFont(liveFont);
+    p.setPen(m_wfLive ? QColor(0xb0, 0xb0, 0xb0) : Qt::white);
+    p.drawText(liveRect, Qt::AlignCenter, "LIVE");
+
     // Total time depth: use ms-per-row derived from radio tile timecodes.
     // This is the radio's own clock — stable and accurate to actual scroll rate.
     const float msPerRow = m_wfMsPerRow > 0 ? m_wfMsPerRow : 100.0f;
-    const float totalSec = wfRect.height() * msPerRow / 1000.0f;
+    const QRect labelRect = strip.adjusted(0, 4, 0, 0);
+    const float totalSec = labelRect.height() * msPerRow / 1000.0f;
     if (totalSec <= 0) return;
 
     QFont f = p.font();
     f.setPointSize(7);
+    f.setBold(false);
     p.setFont(f);
     const QFontMetrics fm(f);
 
@@ -4052,17 +4324,25 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
 
     for (float sec = 0; sec <= totalSec; sec += stepSec) {
         const float frac = sec / totalSec;
-        const int y = wfRect.top() + static_cast<int>(frac * wfRect.height());
+        const int y = labelRect.top() + static_cast<int>(frac * labelRect.height());
         if (y > wfRect.bottom() - 5) continue;
 
         // Tick mark
         p.setPen(QColor(0x50, 0x70, 0x80));
         p.drawLine(stripX, y, stripX + 4, y);
 
-        const QString label = QString("%1s").arg(static_cast<int>(sec));
+        const QString label = m_wfLive
+            ? QString("%1s").arg(static_cast<int>(sec))
+            : pausedTimeLabelForAge(m_wfHistoryOffsetRows
+                                    + static_cast<int>(std::round(sec * 1000.0f / msPerRow)));
 
         p.setPen(QColor(0x80, 0xa0, 0xb0));
-        p.drawText(stripX + 6, y + fm.ascent() / 2, label);
+        if (m_wfLive) {
+            p.drawText(stripX + 6, y + fm.ascent() / 2, label);
+        } else {
+            const QRect textRect(stripX + 6, y - fm.height() / 2, strip.width() - 10, fm.height());
+            p.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
+        }
     }
 }
 

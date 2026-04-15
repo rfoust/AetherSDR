@@ -378,6 +378,18 @@ private:
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
+    int waterfallStripWidth() const;
+    QRect waterfallLiveButtonRect(const QRect& wfRect) const;
+    QRect waterfallTimeScaleRect(const QRect& wfRect) const;
+    void ensureWaterfallHistory();
+    void rebuildWaterfallViewport();
+    void setWaterfallLive(bool live);
+    void appendHistoryRow(const QRgb* rowData, qint64 timestampMs);
+    void appendVisibleRow(const QRgb* rowData);
+    int waterfallHistoryCapacityRows() const;
+    int maxWaterfallHistoryOffsetRows() const;
+    int historyRowIndexForAge(int ageRows) const;
+    QString pausedTimeLabelForAge(int ageRows) const;
 
     // Helper: find overlay index for a sliceId, or -1.
     int overlayIndex(int sliceId) const;
@@ -452,6 +464,16 @@ private:
     // Scrolling waterfall image (Format_RGB32)
     QImage m_waterfall;
     int    m_wfWriteRow{0};  // ring buffer: next row to write (newest at top)
+    QImage m_waterfallHistory;
+    QVector<qint64> m_wfHistoryTimestamps;
+    int    m_wfHistoryWriteRow{0};
+    int    m_wfHistoryRowCount{0};
+    int    m_wfHistoryOffsetRows{0};
+    bool   m_wfLive{true};
+    bool   m_draggingTimeScale{false};
+    int    m_timeScaleDragStartY{0};
+    int    m_timeScaleDragStartOffsetRows{0};
+    static constexpr qint64 kWaterfallHistoryMs = 20LL * 60LL * 1000LL;
 
     // True once we receive native waterfall tile data (PCC 0x8004).
     // When set, updateSpectrum() skips pushing FFT rows to the waterfall
