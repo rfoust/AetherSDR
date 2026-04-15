@@ -385,7 +385,12 @@ void TransmitModel::setMicInputList(const QStringList& inputs)
 
 void TransmitModel::setMicSelection(const QString& input)
 {
-    emit commandReady(QString("mic input %1").arg(input.toUpper()));
+    const QString normalized = input.toUpper();
+    if (m_micSelection != normalized) {
+        m_micSelection = normalized;
+        emit micStateChanged();
+    }
+    emit commandReady(QString("mic input %1").arg(normalized));
 }
 
 void TransmitModel::setMicLevel(int level)

@@ -24,6 +24,10 @@
 
 namespace AetherSDR {
 
+namespace {
+constexpr qint64 kTxAutoRestartMinRuntimeMs = 60000;
+}
+
 void AudioEngine::updateRxBufferStats()
 {
     m_rxBufferBytes.store(m_rxBuffer.size());
@@ -187,8 +191,41 @@ bool AudioEngine::startRxStream()
     m_lastAudioFeedTime.start();  // initialize liveness watchdog (#1411)
 
     QAudioFormat fmt = makeFormat();
-    const QAudioDevice dev = m_outputDevice.isNull()
+    QAudioDevice dev = m_outputDevice.isNull()
         ? QMediaDevices::defaultAudioOutput() : m_outputDevice;
+
+#ifdef Q_OS_MAC
+    if (!m_allowBluetoothTelephonyOutput.load()) {
+        QAudioFormat preferredFmt = makeFormat();
+        preferredFmt.setSampleRate(48000);
+        if (!dev.isFormatSupported(preferredFmt)) {
+            const auto supportsPreferredOutput = [&preferredFmt](const QAudioDevice& candidate) {
+                return !candidate.isNull() && candidate.isFormatSupported(preferredFmt);
+            };
+
+            const QAudioDevice defaultDev = QMediaDevices::defaultAudioOutput();
+            if (supportsPreferredOutput(defaultDev)) {
+                qCWarning(lcAudio) << "AudioEngine: selected output route looks telephony-only, using default 48k-capable output instead:"
+                                   << defaultDev.description();
+                dev = defaultDev;
+            } else {
+                const QString selectedDescription = dev.description();
+                for (const QAudioDevice& candidate : QMediaDevices::audioOutputs()) {
+                    if (candidate.id() == dev.id()) {
+                        continue;
+                    }
+                    if (candidate.description() == selectedDescription
+                        && supportsPreferredOutput(candidate)) {
+                        qCWarning(lcAudio) << "AudioEngine: selected output route looks telephony-only, using sibling 48k-capable output instead:"
+                                           << candidate.description();
+                        dev = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+#endif
 
     // Windows WASAPI shared mode handles sample rate conversion transparently,
     // but Qt's isFormatSupported() often returns false for valid formats (e.g.
@@ -222,8 +259,18 @@ bool AudioEngine::startRxStream()
     // watchdog already handles stale WASAPI sessions after idle/sleep.
     connect(m_audioSink, &QAudioSink::stateChanged, this,
             [this](QAudio::State state) {
-        if (state != QAudio::StoppedState) return;
-        if (!m_audioSink) return;   // intentional stop (stopRxStream nulls this)
+        if (state != QAudio::StoppedState) {
+            return;
+        }
+        if (!m_audioSink) {
+            return;   // intentional stop (stopRxStream nulls this)
+        }
+        const QAudio::Error error = m_audioSink->error();
+        if (error != QAudio::NoError) {
+            qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
+                               << error;
+            return;
+        }
         QMetaObject::invokeMethod(this, [this]() {
             if (!m_audioSink) return;
             qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped unexpectedly, restarting RX (#1303)";
@@ -237,17 +284,48 @@ bool AudioEngine::startRxStream()
     emit rxStarted();
     return true;
 #else
-    if (!dev.isFormatSupported(fmt)) {
-        qCWarning(lcAudio) << "AudioEngine: output device does not support 24kHz stereo Int16, trying 48kHz";
-        fmt.setSampleRate(48000);
-        m_resampleTo48k = true;
-        if (!dev.isFormatSupported(fmt)) {
-            qCWarning(lcAudio) << "AudioEngine: output device does not support 48kHz stereo Int16 either";
-            qCWarning(lcAudio) << "No audio device detected";
-            return false;
+    auto configureOutputFormat = [this, &dev](QAudioFormat& candidateFmt) {
+        candidateFmt = makeFormat();
+#ifdef Q_OS_MAC
+        // CoreAudio can route Bluetooth headsets onto the HFP/telephony
+        // transport when opened directly at 24 kHz. Prefer 48 kHz on macOS
+        // so A2DP-capable devices stay on the normal output profile.
+        candidateFmt.setSampleRate(48000);
+        if (dev.isFormatSupported(candidateFmt)) {
+            m_resampleTo48k = true;
+            return true;
         }
-    } else {
-        m_resampleTo48k = false;
+
+        qCWarning(lcAudio) << "AudioEngine: output device does not support 48kHz stereo float, trying 24kHz";
+        candidateFmt.setSampleRate(DEFAULT_SAMPLE_RATE);
+        if (dev.isFormatSupported(candidateFmt)) {
+            m_resampleTo48k = false;
+            return true;
+        }
+
+        qCWarning(lcAudio) << "AudioEngine: output device does not support 24kHz stereo float either";
+        return false;
+#else
+        if (dev.isFormatSupported(candidateFmt)) {
+            m_resampleTo48k = false;
+            return true;
+        }
+
+        qCWarning(lcAudio) << "AudioEngine: output device does not support 24kHz stereo Int16, trying 48kHz";
+        candidateFmt.setSampleRate(48000);
+        if (dev.isFormatSupported(candidateFmt)) {
+            m_resampleTo48k = true;
+            return true;
+        }
+
+        qCWarning(lcAudio) << "AudioEngine: output device does not support 48kHz stereo Int16 either";
+        return false;
+#endif
+    };
+
+    if (!configureOutputFormat(fmt)) {
+        qCWarning(lcAudio) << "No audio device detected";
+        return false;
     }
 #endif
 
@@ -270,8 +348,18 @@ bool AudioEngine::startRxStream()
     // watchdog already handles stale WASAPI sessions after idle/sleep.
     connect(m_audioSink, &QAudioSink::stateChanged, this,
             [this](QAudio::State state) {
-        if (state != QAudio::StoppedState) return;
-        if (!m_audioSink) return;   // intentional stop (stopRxStream nulls this)
+        if (state != QAudio::StoppedState) {
+            return;
+        }
+        if (!m_audioSink) {
+            return;   // intentional stop (stopRxStream nulls this)
+        }
+        const QAudio::Error error = m_audioSink->error();
+        if (error != QAudio::NoError) {
+            qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
+                               << error;
+            return;
+        }
         QMetaObject::invokeMethod(this, [this]() {
             if (!m_audioSink) return;
             qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped unexpectedly, restarting RX (#1303)";
@@ -919,6 +1007,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 
 #ifdef Q_OS_MAC
     // macOS: QAudioSource pull mode broken — use push mode with QBuffer
+    const quint64 txLifecycleGeneration = ++m_txLifecycleGeneration;
     m_micBuffer = new QBuffer(this);
     m_micBuffer->open(QIODevice::ReadWrite);
     m_audioSource = new QAudioSource(dev, fmt, this);
@@ -941,10 +1030,42 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // runtime (~16h). Detect the silent stop, pause the timer, and restart
     // cleanly so onTxAudioReady never touches a stale m_micBuffer. (#1149)
     connect(m_audioSource, &QAudioSource::stateChanged, this,
-            [this](QAudio::State state) {
-        if (state != QAudio::StoppedState) return;
-        if (!m_txPollTimer) return;  // intentional stop already handled
+            [this, txLifecycleGeneration](QAudio::State state) {
+        if (state != QAudio::StoppedState) {
+            return;
+        }
+        if (txLifecycleGeneration != m_txLifecycleGeneration) {
+            return;
+        }
+        if (!m_audioSource || !m_txPollTimer) {
+            return;  // intentional stop already handled
+        }
+
+        const QAudio::Error error = m_audioSource->error();
         m_txPollTimer->stop();
+        if (error != QAudio::NoError) {
+            qCWarning(lcAudio) << "AudioEngine: QAudioSource stopped with error, not auto-restarting TX"
+                               << error;
+            QMetaObject::invokeMethod(this, [this]() {
+                if (m_audioSource) {
+                    stopTxStream();
+                }
+            }, Qt::QueuedConnection);
+            return;
+        }
+
+        const qint64 runtimeMs = m_txSourceStartTime.isValid() ? m_txSourceStartTime.elapsed() : 0;
+        if (!m_txSourceStartTime.isValid() || runtimeMs < kTxAutoRestartMinRuntimeMs) {
+            qCWarning(lcAudio) << "AudioEngine: QAudioSource stopped too soon, not auto-restarting TX"
+                               << runtimeMs << "ms";
+            QMetaObject::invokeMethod(this, [this]() {
+                if (m_audioSource) {
+                    stopTxStream();
+                }
+            }, Qt::QueuedConnection);
+            return;
+        }
+
         QHostAddress addr = m_txAddress;
         quint16 port = m_txPort;
         QMetaObject::invokeMethod(this, [this, addr, port]() {
@@ -1005,6 +1126,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     connect(m_micDevice, &QIODevice::readyRead, this, &AudioEngine::onTxAudioReady);
 #endif
 
+    m_txSourceStartTime.restart();
     qCWarning(lcAudio) << "AudioEngine: TX stream started ->" << radioAddress.toString()
              << ":" << radioPort << "streamId:" << Qt::hex << m_txStreamId
              << "device:" << dev.description() << "rate:" << fmt.sampleRate()
@@ -1014,33 +1136,42 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 
 void AudioEngine::stopTxStream()
 {
+    ++m_txLifecycleGeneration;
 #ifdef Q_OS_MAC
-    if (m_txPollTimer) {
-        m_txPollTimer->stop();
-        delete m_txPollTimer;
-        m_txPollTimer = nullptr;
+    QTimer* pollTimer = m_txPollTimer;
+    m_txPollTimer = nullptr;
+    QBuffer* micBuffer = m_micBuffer;
+    m_micBuffer = nullptr;
+#endif
+    QAudioSource* audioSource = m_audioSource;
+    m_audioSource = nullptr;
+    m_micDevice = nullptr;
+
+#ifdef Q_OS_MAC
+    if (pollTimer) {
+        pollTimer->stop();
+        delete pollTimer;
     }
 #endif
-    if (m_audioSource) {
+    if (audioSource) {
         // Guard: calling stop() on an already-stopped QAudioSource on macOS causes
         // AudioOutputUnitStop to dereference a stale CoreAudio device handle,
         // producing EXC_ARM_DA_ALIGN / EXC_BAD_ACCESS (#1059).
-        if (m_audioSource->state() != QAudio::StoppedState)
-            m_audioSource->stop();
-        delete m_audioSource;
-        m_audioSource = nullptr;
-        m_micDevice   = nullptr;
+        if (audioSource->state() != QAudio::StoppedState) {
+            audioSource->stop();
+        }
+        delete audioSource;
     }
 #ifdef Q_OS_MAC
-    if (m_micBuffer) {
-        delete m_micBuffer;
-        m_micBuffer = nullptr;
+    if (micBuffer) {
+        delete micBuffer;
     }
 #endif
     m_txSocket.close();
     m_txAccumulator.clear();
     m_txFloatAccumulator.clear();
     m_txResampler.reset();
+    m_txSourceStartTime.invalidate();
 }
 
 void AudioEngine::onTxAudioReady()
@@ -1343,6 +1474,19 @@ void AudioEngine::setInputDevice(const QAudioDevice& dev)
         startTxStream(addr, port);
     }
 }
+
+#ifdef Q_OS_MAC
+void AudioEngine::setAllowBluetoothTelephonyOutput(bool on)
+{
+    const bool changed = (m_allowBluetoothTelephonyOutput.exchange(on) != on);
+    if (!changed || !m_audioSink) {
+        return;
+    }
+
+    stopRxStream();
+    startRxStream();
+}
+#endif
 
 // ─── RADE digital voice support ──────────────────────────────────────────────
 

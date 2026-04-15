@@ -156,6 +156,9 @@ public:
     // Device selection (restarts the stream if currently running)
     void setOutputDevice(const QAudioDevice& dev);
     void setInputDevice(const QAudioDevice& dev);
+#ifdef Q_OS_MAC
+    void setAllowBluetoothTelephonyOutput(bool on);
+#endif
     QAudioDevice outputDevice() const { return m_outputDevice; }
     QAudioDevice inputDevice()  const { return m_inputDevice; }
     qsizetype rxBufferBytes() const { return m_rxBufferBytes.load(); }
@@ -218,6 +221,11 @@ private:
     std::atomic<bool> m_radeMode{false}; // RADE digital voice mode active (atomic: cross-thread)
     std::atomic<float> m_pcMicGain{1.0f};     // client-side PC mic gain (0.0-1.0)
     std::atomic<bool>  m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
+    QElapsedTimer      m_txSourceStartTime;
+    quint64            m_txLifecycleGeneration{0};
+#ifdef Q_OS_MAC
+    std::atomic<bool>  m_allowBluetoothTelephonyOutput{false};
+#endif
     std::atomic<bool>  m_daxTxUseRadioRoute{false}; // false = low-latency route (dax=0)
     std::atomic<bool>  m_transmitting{false}; // true when radio is in TX AND we own TX
     std::atomic<bool>  m_radioTransmitting{false}; // true when radio is in TX (any owner)

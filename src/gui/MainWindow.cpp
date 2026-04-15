@@ -766,21 +766,33 @@ MainWindow::MainWindow(QWidget* parent)
         m_audio->setRemoteTxStreamId(streamId);
         // Radio always forces Opus for remote_audio_tx (confirmed v1.4.0.0)
         m_audio->setOpusTxEnabled(true);
-        // Restore PC mic gain from client-side settings (radio has no
-        // hardware gain stage for PC input — client-authoritative)
+        // Only the PC mic path needs local audio capture. For radio-side mic
+        // selections, remote_audio_tx still exists for VOX/met_in_rx, but the
+        // radio owns the actual input path. Starting QAudioSource here on
+        // macOS pins Bluetooth output in telephony mode.
         if (m_radioModel.transmitModel().micSelection() == "PC") {
+            // Restore PC mic gain from client-side settings (radio has no
+            // hardware gain stage for PC input — client-authoritative)
             int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
             m_audio->setPcMicGain(gain);
+            if (!m_audio->isTxStreaming()) {
+                audioStartTx(m_radioModel.radioAddress(), 4991);
+            }
+        } else if (m_audio->isTxStreaming()) {
+            audioStopTx();
         }
         qDebug() << "MainWindow: remote audio TX stream ID set to" << Qt::hex << streamId;
-        // Ensure mic TX stream is running for VOX monitoring
-        if (!m_audio->isTxStreaming()) {
-            audioStartTx(m_radioModel.radioAddress(), 4991);
-        }
     });
     // Start/stop PC audio TX when mic_selection changes
     connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
             this, [this]() {
+#ifdef Q_OS_MAC
+        const bool allowBluetoothTelephonyOutput =
+            m_radioModel.transmitModel().micSelection() == "PC";
+        QMetaObject::invokeMethod(m_audio, [this, allowBluetoothTelephonyOutput]() {
+            m_audio->setAllowBluetoothTelephonyOutput(allowBluetoothTelephonyOutput);
+        }, Qt::QueuedConnection);
+#endif
         if (m_radioModel.transmitModel().micSelection() == "PC") {
             // Restore PC mic gain from client-side settings
             int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
@@ -795,6 +807,13 @@ MainWindow::MainWindow(QWidget* parent)
             audioStopTx();
         }
     });
+#ifdef Q_OS_MAC
+    const bool allowBluetoothTelephonyOutput =
+        m_radioModel.transmitModel().micSelection() == "PC";
+    QMetaObject::invokeMethod(m_audio, [this, allowBluetoothTelephonyOutput]() {
+        m_audio->setAllowBluetoothTelephonyOutput(allowBluetoothTelephonyOutput);
+    }, Qt::QueuedConnection);
+#endif
     // Sync PC mic gain directly from slider (radio ignores mic_level for PC input)
     connect(m_appletPanel->phoneCwApplet(), &PhoneCwApplet::micLevelChanged,
             this, [this](int level) {
