@@ -7283,10 +7283,14 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             sw->setSliceOverlayMarkerStyle(sliceId, thin, hideEdges);
     });
 
-    // Pan re-apply after NR mono-mix (#1460): keep AudioEngine in sync with the
-    // radio-side pan so client NR can restore the balance on its output.
-    connect(w, &VfoWidget::rxPanChanged, this, [this](int v) {
-        m_audio->setRxPan(v);
+    // Pan re-apply after NR mono-mix (#1460, #1796): keep AudioEngine in sync
+    // with the radio-side pan value from ALL sources (VFO panel, RX applet,
+    // MIDI, radio echo-back on connect).  Connecting SliceModel::audioPanChanged
+    // covers every path that calls setAudioPan(); only the active slice's value
+    // matters because AudioEngine plays one slice at a time.
+    connect(s, &SliceModel::audioPanChanged, this, [this, sliceId](int v) {
+        if (sliceId == m_activeSliceId)
+            m_audio->setRxPan(v);
     });
 
     // Per-slice AF mute persistence (#1560): save state to AppSettings on each
