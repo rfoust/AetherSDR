@@ -68,6 +68,8 @@ public:
     void disconnectRadioClients(const QString& serial, const QList<quint32>& handles);
     // Disconnect from SmartLink server
     void disconnect();
+    // Reconnect to SmartLink using the current authenticated token.
+    void reconnect();
 
     bool isConnected()     const { return m_serverConnected; }
     bool isAuthenticated() const { return m_authenticated; }

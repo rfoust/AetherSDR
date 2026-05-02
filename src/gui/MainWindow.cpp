@@ -654,10 +654,10 @@ void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
     statusBar()->showMessage("Remote client disconnect request sent through SmartLink.", 4000);
 }
 
-void MainWindow::startWanRadioConnect(const WanRadioInfo& info)
+void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots)
 {
     QList<quint32> disconnectHandles;
-    if (!confirmClientSlotAvailability(info, &disconnectHandles)) {
+    if (promptForClientSlots && !confirmClientSlotAvailability(info, &disconnectHandles)) {
         m_connPanel->setStatusText("Connection canceled");
         setPanadapterConnectionAnimation(false);
         return;
@@ -701,6 +701,27 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info)
     } else {
         requestSmartLinkConnect();
     }
+}
+
+void MainWindow::requestWanReconnect()
+{
+    if (m_userDisconnected || m_radioModel.isConnected()
+            || m_pendingWanRadio.serial.isEmpty()) {
+        m_wanReconnectTimer.stop();
+        return;
+    }
+
+    m_connPanel->setStatusText("Reconnecting via SmartLink...");
+    setPanadapterConnectionAnimation(true, "Reconnecting to remote radio...");
+
+    if (!m_smartLink.isConnected()) {
+        m_smartLink.reconnect();
+        m_wanReconnectTimer.start();
+        return;
+    }
+
+    startWanRadioConnect(m_pendingWanRadio, false);
+    m_wanReconnectTimer.start();
 }
 
 void MainWindow::showForcedDisconnectDialog(bool wasWan,
@@ -1107,6 +1128,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, [this]{
         m_userDisconnected = true;
+        m_wanReconnectTimer.stop();
         setPanadapterConnectionAnimation(false);
         auto& s = AppSettings::instance();
         s.remove("LastConnectedRadioSerial");
@@ -1117,6 +1139,28 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── SmartLink ──────────────────────────────────────────────────────────
     m_connPanel->setSmartLinkClient(&m_smartLink);
+    m_wanReconnectTimer.setInterval(5000);
+    m_wanReconnectTimer.setSingleShot(true);
+    connect(&m_wanReconnectTimer, &QTimer::timeout,
+            this, &MainWindow::requestWanReconnect);
+    connect(&m_smartLink, &SmartLinkClient::authFailed,
+            this, [this](const QString& err) {
+        if (!m_wanReconnectTimer.isActive() || m_pendingWanRadio.serial.isEmpty()
+                || m_radioModel.isConnected()) {
+            return;
+        }
+
+        m_wanReconnectTimer.stop();
+        m_connPanel->setStatusText("SmartLink sign-in required");
+        statusBar()->showMessage("SmartLink reconnect stopped: " + err, 5000);
+        setPanadapterConnectionAnimation(false);
+        if (m_reconnectDlg) {
+            m_reconnectDlg->close();
+            m_reconnectDlg->deleteLater();
+            m_reconnectDlg = nullptr;
+        }
+        m_connPanel->show();
+    });
 
     connect(m_connPanel, &ConnectionPanel::smartLinkLoginRequested,
             this, [this](const QString& email, const QString& pass) {
@@ -1167,6 +1211,7 @@ MainWindow::MainWindow(QWidget* parent)
     // to RadioConnection. For now, log the event.
     connect(&m_wanConnection, &WanConnection::connected, this, [this] {
         qDebug() << "MainWindow: WAN connection established!";
+        m_wanReconnectTimer.stop();
         m_connPanel->setStatusText("Connected via SmartLink");
         m_connPanel->setConnected(true);
 
@@ -1180,7 +1225,9 @@ MainWindow::MainWindow(QWidget* parent)
         qDebug() << "MainWindow: WAN connection lost";
         m_connPanel->setStatusText("SmartLink disconnected");
         m_connPanel->setConnected(false);
-        setPanadapterConnectionAnimation(false);
+        if (m_userDisconnected) {
+            setPanadapterConnectionAnimation(false);
+        }
     });
     connect(&m_wanConnection, &WanConnection::errorOccurred, this, [this](const QString& err) {
         m_connPanel->setStatusText("SmartLink error: " + err);
@@ -4130,6 +4177,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
 
     // Suppress reconnect dialog during shutdown (#527)
     m_userDisconnected = true;
+    m_wanReconnectTimer.stop();
     if (m_reconnectDlg) {
         m_reconnectDlg->close();
         delete m_reconnectDlg;
@@ -7115,6 +7163,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
     } else {
+        const bool reconnectWan = !m_userDisconnected && m_radioModel.isWan()
+            && !m_pendingWanRadio.serial.isEmpty();
+        if (reconnectWan && !m_wanReconnectTimer.isActive()) {
+            m_wanReconnectTimer.start();
+        }
+
         if (m_agManualConnectTimer) {
             m_agManualConnectTimer->stop();
             m_agManualConnectTimer->deleteLater();
@@ -7185,6 +7239,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             layout->addWidget(dismissBtn, 0, Qt::AlignCenter);
             connect(dismissBtn, &QPushButton::clicked, this, [this]() {
                 m_userDisconnected = true;
+                m_wanReconnectTimer.stop();
                 setPanadapterConnectionAnimation(false);
                 m_reconnectDlg->close();
                 m_reconnectDlg->deleteLater();

@@ -242,6 +242,24 @@ void SmartLinkClient::disconnect()
     m_serverConnected = false;
 }
 
+void SmartLinkClient::reconnect()
+{
+    if (m_serverConnected) {
+        return;
+    }
+
+    if (!m_refreshToken.isEmpty()) {
+        loginWithRefreshToken(m_refreshToken);
+        return;
+    }
+
+    if (m_idToken.isEmpty()) {
+        return;
+    }
+
+    connectToServer();
+}
+
 void SmartLinkClient::requestConnect(const QString& serial, quint16 holePunchPort)
 {
     if (!m_serverConnected) return;
@@ -350,7 +368,13 @@ void SmartLinkClient::parseMessage(const QString& msg)
         parseUserSettings(msg);
     } else if (msg.startsWith("application registration_invalid")) {
         qCWarning(lcSmartLink) << "SmartLinkClient: registration invalid — token rejected";
+        m_pingTimer.stop();
+        m_serverConnected = false;
         m_authenticated = false;
+        m_idToken.clear();
+        if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+            m_socket.disconnectFromHost();
+        }
         emit authFailed("SmartLink registration invalid — please re-login");
     } else if (msg.startsWith("radio test_connection")) {
         parseTestResults(msg);
