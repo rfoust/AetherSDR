@@ -2,27 +2,82 @@
 
 #include "core/PanadapterStream.h"
 
+#include <QComboBox>
 #include <QDialog>
 #include <QLabel>
+#include <QObject>
 #include <QTimer>
+#include <QVector>
 
 namespace AetherSDR {
 
 class RadioModel;
 class AudioEngine;
+class TimeSeriesGraphWidget;
+
+struct NetworkDiagnosticsSample {
+    qint64 timestampMs{0};
+    int    rttMs{0};
+    int    audioGapMs{0};
+    int    audioJitterMs{0};
+    double rxKbps{0.0};
+    double txKbps{0.0};
+    double audioKbps{0.0};
+    double fftKbps{0.0};
+    double waterfallKbps{0.0};
+    double meterKbps{0.0};
+    double daxKbps{0.0};
+    double packetLossPct{0.0};
+    double audioLossPct{0.0};
+    double fftLossPct{0.0};
+    double waterfallLossPct{0.0};
+    double meterLossPct{0.0};
+    double daxLossPct{0.0};
+    double audioBufferMs{0.0};
+    double underrunsPerSecond{0.0};
+};
+
+class NetworkDiagnosticsHistory : public QObject {
+public:
+    explicit NetworkDiagnosticsHistory(RadioModel* model, AudioEngine* audio, QObject* parent = nullptr);
+
+    const QVector<NetworkDiagnosticsSample>& samples() const { return m_samples; }
+    NetworkDiagnosticsSample latestSample() const;
+
+private:
+    void sampleNow();
+    void pruneSamples(qint64 nowMs);
+
+    RadioModel* m_model{nullptr};
+    AudioEngine* m_audio{nullptr};
+    QTimer m_sampleTimer;
+    QVector<NetworkDiagnosticsSample> m_samples;
+    qint64 m_lastRxBytes{0};
+    qint64 m_lastTxBytes{0};
+    qint64 m_lastSampleMs{0};
+    quint64 m_lastAudioUnderrunCount{0};
+    qint64 m_lastCatBytes[PanadapterStream::CatCount]{};
+};
 
 class NetworkDiagnosticsDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit NetworkDiagnosticsDialog(RadioModel* model, AudioEngine* audio, QWidget* parent = nullptr);
+    explicit NetworkDiagnosticsDialog(RadioModel* model,
+                                      AudioEngine* audio,
+                                      NetworkDiagnosticsHistory* history,
+                                      QWidget* parent = nullptr);
 
 private:
     void refresh();
+    void updateCharts();
+    int selectedRangeSeconds() const;
 
     RadioModel* m_model;
     AudioEngine* m_audio;
+    NetworkDiagnosticsHistory* m_history{nullptr};
     QTimer      m_refreshTimer;
+    QComboBox*  m_rangeCombo{nullptr};
 
     QLabel* m_statusLabel;
     QLabel* m_targetIpLabel;
@@ -56,13 +111,19 @@ private:
     QLabel* m_audioPacketGapLabel;
     QLabel* m_audioPacketGapMaxLabel;
     QLabel* m_audioJitterLabel;
+    QLabel* m_overviewStatusValue{nullptr};
+    QLabel* m_overviewLatencyValue{nullptr};
+    QLabel* m_overviewLossValue{nullptr};
+    QLabel* m_overviewAudioValue{nullptr};
 
-    qint64 m_lastRxBytes{0};
-    qint64 m_lastTxBytes{0};
-    quint64 m_lastAudioUnderrunCount{0};
-
-    // Per-category byte snapshots for rate calculation
-    qint64 m_lastCatBytes[PanadapterStream::CatCount]{};
+    TimeSeriesGraphWidget* m_overviewLatencyGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewLossGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewRatesGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewAudioGraph{nullptr};
+    TimeSeriesGraphWidget* m_latencyGraph{nullptr};
+    TimeSeriesGraphWidget* m_ratesGraph{nullptr};
+    TimeSeriesGraphWidget* m_lossGraph{nullptr};
+    TimeSeriesGraphWidget* m_audioGraph{nullptr};
 };
 
 } // namespace AetherSDR

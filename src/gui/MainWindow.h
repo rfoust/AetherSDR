@@ -64,6 +64,7 @@ class PanadapterApplet;
 class PanadapterStack;
 class AppletPanel;
 class BandPlanManager;
+class NetworkDiagnosticsHistory;
 class WhatsNewDialog;
 class CwxPanel;
 class DvkPanel;
@@ -231,6 +232,7 @@ private:
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};
     QThread*          m_audioThread{nullptr};
+    NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};
     ClientPuduMonitor* m_puduMonitor{nullptr};
     BandSettings      m_bandSettings;
@@ -358,6 +360,7 @@ private:
     QLabel* m_paTempLabel{nullptr};
     QLabel* m_supplyVoltLabel{nullptr};
     QLabel* m_networkLabel{nullptr};
+    QTimer m_networkTooltipRefreshTimer;
     QLabel* m_tgxlIndicator{nullptr};
     QLabel* m_pgxlIndicator{nullptr};
     QLabel* m_txIndicator{nullptr};

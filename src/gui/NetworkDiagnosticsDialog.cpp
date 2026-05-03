@@ -2,40 +2,442 @@
 #include "core/AudioEngine.h"
 #include "models/RadioModel.h"
 
-#include <QScrollArea>
-#include <QVBoxLayout>
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+#include <QComboBox>
+#include <QDateTime>
+#include <QFrame>
 #include <QGroupBox>
 #include <QGridLayout>
+#include <QHBoxLayout>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSet>
+#include <QTabWidget>
+#include <QVBoxLayout>
 
 namespace AetherSDR {
 
-NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngine* audio, QWidget* parent)
-    : QDialog(parent), m_model(model), m_audio(audio)
+class TimeSeriesGraphWidget : public QWidget {
+public:
+    struct Series {
+        QString label;
+        QColor  color;
+        QVector<QPointF> points;
+        QString unitSuffix;
+    };
+
+    struct LegendHit {
+        QRect   rect;
+        QString label;
+    };
+
+    explicit TimeSeriesGraphWidget(QString title, QString suffix, QWidget* parent = nullptr)
+        : QWidget(parent)
+        , m_title(std::move(title))
+        , m_suffix(std::move(suffix))
+    {
+        setMinimumHeight(220);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setCursor(Qt::PointingHandCursor);
+    }
+
+    void setSeries(QVector<Series> series, int rangeSeconds)
+    {
+        m_series = std::move(series);
+        m_rangeSeconds = rangeSeconds;
+        if (!m_selectedLabels.isEmpty()) {
+            QSet<QString> available;
+            for (const Series& series : m_series) {
+                available.insert(series.label);
+            }
+            for (auto it = m_selectedLabels.begin(); it != m_selectedLabels.end();) {
+                if (!available.contains(*it)) {
+                    it = m_selectedLabels.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        update();
+    }
+
+    void setPrimaryAxisSeries(QString label)
+    {
+        m_primaryAxisSeries = std::move(label);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.fillRect(rect(), QColor("#0a0a14"));
+
+        const QRectF plot = rect().adjusted(84, 30, -14, -42);
+        painter.setPen(QPen(QColor("#203040"), 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 4, 4);
+
+        painter.setPen(QColor("#c8d8e8"));
+        const QFont normalFont = painter.font();
+        QFont titleFont = painter.font();
+        titleFont.setBold(true);
+        painter.setFont(titleFont);
+        painter.drawText(QRectF(10, 6, width() - 190, 18), Qt::AlignLeft | Qt::AlignVCenter, m_title);
+        painter.setFont(normalFont);
+        painter.setPen(QColor("#8aa8c0"));
+        painter.drawText(QRectF(width() - 180, 6, 166, 18),
+                         Qt::AlignRight | Qt::AlignVCenter, rangeLabel());
+
+        const QVector<Series> visibleSeries = activeSeries();
+        const bool hasPoints = std::any_of(visibleSeries.cbegin(), visibleSeries.cend(), [](const Series& series) {
+            return !series.points.isEmpty();
+        });
+        if (!hasPoints || plot.width() < 20 || plot.height() < 20) {
+            painter.setPen(QColor("#8aa8c0"));
+            painter.drawText(plot, Qt::AlignCenter, "Collecting graph data");
+            return;
+        }
+
+        const QVector<Series> scaledSeries = axisScaledSeries(visibleSeries);
+        double maxY = 1.0;
+        for (const Series& series : scaledSeries) {
+            for (const QPointF& point : series.points) {
+                maxY = std::max(maxY, point.y());
+            }
+        }
+        maxY = niceCeiling(maxY);
+        const QString axisSuffix = activeAxisSuffix(visibleSeries);
+
+        painter.setPen(QPen(QColor("#203040"), 1));
+        for (int i = 0; i <= 4; ++i) {
+            const double y = plot.bottom() - (plot.height() * i / 4.0);
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+            painter.setPen(QColor("#8aa8c0"));
+            painter.drawText(QRectF(4, y - 8, 74, 16), Qt::AlignRight | Qt::AlignVCenter,
+                             formatAxisValue(maxY * i / 4.0, axisSuffix));
+            painter.setPen(QPen(QColor("#203040"), 1));
+        }
+        for (int i = 0; i <= 4; ++i) {
+            const double x = plot.left() + (plot.width() * i / 4.0);
+            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        }
+
+        for (const Series& series : visibleSeries) {
+            if (series.points.isEmpty()) {
+                continue;
+            }
+
+            QPainterPath path;
+            bool first = true;
+            bool hasBucket = false;
+            int bucketPixel = 0;
+            int bucketCount = 0;
+            QPointF bucketSum;
+            auto flushBucket = [&] {
+                if (!hasBucket || bucketCount <= 0) {
+                    return;
+                }
+                const QPointF mapped = bucketSum / bucketCount;
+                if (first) {
+                    path.moveTo(mapped);
+                    first = false;
+                } else {
+                    path.lineTo(mapped);
+                }
+                bucketSum = QPointF();
+                bucketCount = 0;
+            };
+
+            for (const QPointF& point : series.points) {
+                const double xRatio = std::clamp(point.x() / std::max(1, m_rangeSeconds), 0.0, 1.0);
+                const double yRatio = std::clamp(point.y() / maxY, 0.0, 1.0);
+                const QPointF mapped(plot.left() + plot.width() * xRatio,
+                                     plot.bottom() - plot.height() * yRatio);
+                const int pixel = static_cast<int>(std::round(mapped.x()));
+                if (!hasBucket) {
+                    hasBucket = true;
+                    bucketPixel = pixel;
+                } else if (pixel != bucketPixel) {
+                    flushBucket();
+                    bucketPixel = pixel;
+                }
+                bucketSum += mapped;
+                ++bucketCount;
+            }
+            flushBucket();
+            painter.setPen(QPen(series.color, 2));
+            painter.drawPath(path);
+        }
+
+        drawLegend(&painter, plot);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        for (const LegendHit& hit : m_legendHits) {
+            if (!hit.rect.contains(event->pos())) {
+                continue;
+            }
+            if (event->modifiers().testFlag(Qt::ControlModifier)) {
+                if (m_selectedLabels.contains(hit.label)) {
+                    m_selectedLabels.remove(hit.label);
+                } else {
+                    m_selectedLabels.insert(hit.label);
+                }
+            } else {
+                const bool onlySelected = m_selectedLabels.size() == 1 && m_selectedLabels.contains(hit.label);
+                m_selectedLabels.clear();
+                if (!onlySelected) {
+                    m_selectedLabels.insert(hit.label);
+                }
+            }
+            update();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+private:
+    static double niceCeiling(double value)
+    {
+        if (value <= 1.0) {
+            return 1.0;
+        }
+        const double magnitude = std::pow(10.0, std::floor(std::log10(value)));
+        const double normalized = value / magnitude;
+        if (normalized <= 2.0) {
+            return 2.0 * magnitude;
+        }
+        if (normalized <= 5.0) {
+            return 5.0 * magnitude;
+        }
+        return 10.0 * magnitude;
+    }
+
+    QString formatAxisValue(double value, const QString& suffix) const
+    {
+        if (value >= 1000000.0) {
+            return QString("%1M%2").arg(value / 1000000.0, 0, 'f', 1).arg(suffix);
+        }
+        if (value >= 1000.0) {
+            return QString("%1k%2").arg(value / 1000.0, 0, 'f', 1).arg(suffix);
+        }
+        const int precision = value >= 10.0 ? 0 : 1;
+        return QString("%1%2").arg(value, 0, 'f', precision).arg(suffix);
+    }
+
+    QString rangeLabel() const
+    {
+        if (m_rangeSeconds < 3600) {
+            return QString("Last %1 minutes").arg(m_rangeSeconds / 60);
+        }
+        if (m_rangeSeconds < 86400) {
+            return QString("Last %1 hours").arg(m_rangeSeconds / 3600);
+        }
+        return QString("Last %1 days").arg(m_rangeSeconds / 86400);
+    }
+
+    QVector<Series> activeSeries() const
+    {
+        if (m_selectedLabels.isEmpty()) {
+            return m_series;
+        }
+
+        QVector<Series> selected;
+        selected.reserve(m_selectedLabels.size());
+        for (const Series& series : m_series) {
+            if (m_selectedLabels.contains(series.label)) {
+                selected.push_back(series);
+            }
+        }
+        return selected.isEmpty() ? m_series : selected;
+    }
+
+    QVector<Series> axisScaledSeries(const QVector<Series>& visibleSeries) const
+    {
+        if (!m_primaryAxisSeries.isEmpty()
+            && (m_selectedLabels.isEmpty() || m_selectedLabels.contains(m_primaryAxisSeries))) {
+            QVector<Series> primary;
+            primary.reserve(1);
+            for (const Series& series : visibleSeries) {
+                if (series.label == m_primaryAxisSeries) {
+                    primary.push_back(series);
+                    break;
+                }
+            }
+            if (!primary.isEmpty()) {
+                return primary;
+            }
+        }
+        return visibleSeries;
+    }
+
+    QString activeAxisSuffix(const QVector<Series>& visibleSeries) const
+    {
+        if (!m_primaryAxisSeries.isEmpty()
+            && (m_selectedLabels.isEmpty() || m_selectedLabels.contains(m_primaryAxisSeries))) {
+            for (const Series& series : m_series) {
+                if (series.label == m_primaryAxisSeries) {
+                    return series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
+                }
+            }
+            return m_suffix;
+        }
+
+        if (m_selectedLabels.size() == 1) {
+            const QString selectedLabel = *m_selectedLabels.constBegin();
+            for (const Series& series : m_series) {
+                if (series.label == selectedLabel) {
+                    return series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
+                }
+            }
+        }
+
+        QString suffix;
+        for (const Series& series : visibleSeries) {
+            if (suffix.isEmpty()) {
+                suffix = series.unitSuffix;
+            } else if (suffix != series.unitSuffix) {
+                return m_suffix;
+            }
+        }
+        return suffix.isEmpty() ? m_suffix : suffix;
+    }
+
+    void drawLegend(QPainter* painter, const QRectF& plot)
+    {
+        m_legendHits.clear();
+        int x = static_cast<int>(plot.left());
+        int y = static_cast<int>(plot.bottom()) + 12;
+        const QFontMetrics fm(painter->font());
+        for (const Series& series : m_series) {
+            if (series.points.isEmpty()) {
+                continue;
+            }
+            const bool selected = m_selectedLabels.isEmpty() || m_selectedLabels.contains(series.label);
+            const QColor textColor = selected ? QColor("#c8d8e8") : QColor("#5f7488");
+            const QColor lineColor = selected ? series.color : QColor("#405468");
+            const int labelWidth = fm.horizontalAdvance(series.label);
+            const QRect hitRect(x, y, labelWidth + 24, 18);
+
+            painter->setPen(QPen(lineColor, selected ? 2 : 1));
+            painter->drawLine(x, y + 7, x + 14, y + 7);
+            painter->setPen(textColor);
+            painter->drawText(x + 18, y, labelWidth + 8, 16,
+                              Qt::AlignLeft | Qt::AlignVCenter, series.label);
+            m_legendHits.push_back({hitRect, series.label});
+            x += 30 + labelWidth;
+            if (x > width() - 110) {
+                break;
+            }
+        }
+    }
+
+    QString m_title;
+    QString m_suffix;
+    QString m_primaryAxisSeries;
+    int m_rangeSeconds{300};
+    QVector<Series> m_series;
+    QSet<QString> m_selectedLabels;
+    QVector<LegendHit> m_legendHits;
+};
+
+NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
+                                                   AudioEngine* audio,
+                                                   NetworkDiagnosticsHistory* history,
+                                                   QWidget* parent)
+    : QDialog(parent), m_model(model), m_audio(audio), m_history(history)
 {
     setWindowTitle("Network Diagnostics");
     setMinimumSize(920, 680);
     resize(980, 760);
+    setStyleSheet(
+        "QDialog { background: #050710; }"
+        "QTabWidget::pane { border: 1px solid #203040; border-radius: 4px; top: -1px; }"
+        "QTabBar::tab { background: #0a0a14; border: 1px solid #203040; "
+        "border-bottom: none; color: #8aa8c0; padding: 6px 12px; }"
+        "QTabBar::tab:selected { color: #c8d8e8; background: #111120; }"
+        "QTabBar::tab:hover { color: #c8d8e8; }"
+        "QGroupBox { border: 1px solid #203040; border-radius: 4px; "
+        "color: #c8d8e8; font-weight: bold; margin-top: 12px; padding-top: 8px; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+        "QLabel { color: #8aa8c0; }"
+        "QScrollArea { background: transparent; border: none; }"
+        "QScrollArea > QWidget > QWidget { background: transparent; }");
 
     auto* root = new QVBoxLayout(this);
-    auto* scroll = new QScrollArea(this);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    root->addWidget(scroll);
+    root->setContentsMargins(10, 10, 10, 10);
+    auto* controlRow = new QHBoxLayout;
+    auto* titleLabel = new QLabel("Network Diagnostics");
+    titleLabel->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; font-size: 15px; }");
+    auto* rangeLabel = new QLabel("Timeframe");
+    rangeLabel->setStyleSheet("QLabel { color: #8aa8c0; }");
+    m_rangeCombo = new QComboBox(this);
+    m_rangeCombo->setFixedWidth(132);
+    m_rangeCombo->setStyleSheet(
+        "QComboBox { background: #0a0a14; border: 1px solid #203040; "
+        "border-radius: 4px; color: #c8d8e8; padding: 3px 8px; }"
+        "QComboBox:hover { border-color: #00b4d8; }"
+        "QComboBox::drop-down { border: none; width: 18px; }"
+        "QComboBox QAbstractItemView { background: #111120; color: #c8d8e8; "
+        "selection-background-color: #00b4d8; selection-color: #000; }");
+    m_rangeCombo->addItem("5 minutes", 5 * 60);
+    m_rangeCombo->addItem("15 minutes", 15 * 60);
+    m_rangeCombo->addItem("1 hour", 60 * 60);
+    m_rangeCombo->addItem("1 day", 24 * 60 * 60);
+    m_rangeCombo->addItem("1 week", 7 * 24 * 60 * 60);
+    controlRow->addWidget(titleLabel);
+    controlRow->addStretch();
+    controlRow->addWidget(rangeLabel);
+    controlRow->addWidget(m_rangeCombo);
+    root->addLayout(controlRow);
+
+    auto* tabs = new QTabWidget(this);
+    root->addWidget(tabs, 1);
+
+    auto* overviewPage = new QWidget(this);
+    auto* overviewLayout = new QGridLayout(overviewPage);
+    overviewLayout->setContentsMargins(8, 8, 8, 8);
+    overviewLayout->setHorizontalSpacing(12);
+    overviewLayout->setVerticalSpacing(12);
+    overviewLayout->setColumnStretch(0, 1);
+    overviewLayout->setColumnStretch(1, 1);
+    overviewLayout->setColumnStretch(2, 1);
+    overviewLayout->setColumnStretch(3, 1);
+    tabs->addTab(overviewPage, "Overview");
+
+    auto* detailsScroll = new QScrollArea(this);
+    detailsScroll->setWidgetResizable(true);
+    detailsScroll->setFrameShape(QFrame::NoFrame);
+    tabs->addTab(detailsScroll, "Details");
 
     auto* content = new QWidget;
-    scroll->setWidget(content);
+    detailsScroll->setWidget(content);
     auto* contentLayout = new QGridLayout(content);
     contentLayout->setContentsMargins(8, 8, 8, 8);
     contentLayout->setColumnStretch(0, 1);
     contentLayout->setColumnStretch(1, 1);
+    contentLayout->setColumnMinimumWidth(0, 430);
+    contentLayout->setColumnMinimumWidth(1, 430);
     contentLayout->setHorizontalSpacing(16);
     contentLayout->setVerticalSpacing(14);
+    content->setMinimumWidth(900);
 
     auto makeVal = [](const QString& init = "") {
+        static constexpr int kValueColumnWidth = 230;
         auto* l = new QLabel(init);
         l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        l->setWordWrap(true);
+        l->setWordWrap(false);
+        l->setMinimumWidth(kValueColumnWidth);
+        l->setMaximumWidth(kValueColumnWidth);
+        l->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
         l->setMinimumHeight(l->fontMetrics().height() + 1);
         l->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; }");
         return l;
@@ -52,8 +454,40 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngin
         return l;
     };
 
+    auto makeHealthCard = [](const QString& title, const QString& subtitle) {
+        auto* card = new QGroupBox(title);
+        card->setMinimumHeight(96);
+        auto* layout = new QVBoxLayout(card);
+        layout->setContentsMargins(10, 12, 10, 10);
+        auto* value = new QLabel("--");
+        value->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        value->setMinimumHeight(value->fontMetrics().height() + 4);
+        value->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; font-size: 18px; }");
+        auto* hint = new QLabel(subtitle);
+        hint->setWordWrap(true);
+        hint->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+        layout->addWidget(value);
+        layout->addWidget(hint);
+        layout->addStretch();
+        return std::pair<QGroupBox*, QLabel*>{card, value};
+    };
+
+    const auto statusCard = makeHealthCard("Status", "Overall connection quality");
+    m_overviewStatusValue = statusCard.second;
+    overviewLayout->addWidget(statusCard.first, 0, 0);
+    const auto latencyCard = makeHealthCard("Latency", "Round-trip time");
+    m_overviewLatencyValue = latencyCard.second;
+    overviewLayout->addWidget(latencyCard.first, 0, 1);
+    const auto lossCard = makeHealthCard("Packet Loss", "Recent sequence gaps");
+    m_overviewLossValue = lossCard.second;
+    overviewLayout->addWidget(lossCard.first, 0, 2);
+    const auto audioCard = makeHealthCard("Audio Buffer", "Current playback cushion");
+    m_overviewAudioValue = audioCard.second;
+    overviewLayout->addWidget(audioCard.first, 0, 3);
+
     // ── Network Status group ─────────────────────────────────────────────
     auto* statusGroup = new QGroupBox("Network Status");
+    statusGroup->setMinimumWidth(430);
     auto* statusGrid = new QGridLayout(statusGroup);
     statusGrid->setColumnStretch(1, 1);
     statusGrid->setVerticalSpacing(2);
@@ -98,6 +532,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngin
 
     // ── Stream Rates group ───────────────────────────────────────────────
     auto* rateGroup = new QGroupBox("Incoming Stream Rates");
+    rateGroup->setMinimumWidth(430);
     auto* rateGrid = new QGridLayout(rateGroup);
     rateGrid->setColumnStretch(1, 1);
     rateGrid->setVerticalSpacing(2);
@@ -137,6 +572,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngin
 
     // ── Packet Loss group ────────────────────────────────────────────────
     auto* dropGroup = new QGroupBox("Packet Loss (Sequence Gaps)");
+    dropGroup->setMinimumWidth(430);
     auto* dropGrid = new QGridLayout(dropGroup);
     dropGrid->setColumnStretch(1, 1);
     dropGrid->setVerticalSpacing(2);
@@ -168,11 +604,14 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngin
 
     m_droppedLabel = new QLabel;
     m_droppedLabel->setAlignment(Qt::AlignCenter);
+    m_droppedLabel->setWordWrap(true);
+    m_droppedLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_droppedLabel->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; }");
     dropGrid->addWidget(m_droppedLabel, row++, 0, 1, 2);
 
     // ── Audio Playback group ──────────────────────────────────────────────
     auto* audioGroup = new QGroupBox("Audio Playback");
+    audioGroup->setMinimumWidth(430);
     auto* audioGrid = new QGridLayout(audioGroup);
     audioGrid->setColumnStretch(1, 1);
     audioGrid->setVerticalSpacing(2);
@@ -216,6 +655,31 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngin
     contentLayout->addWidget(dropGroup, 1, 0);
     contentLayout->addWidget(audioGroup, 1, 1);
 
+    m_overviewLatencyGraph = new TimeSeriesGraphWidget("Latency and Jitter", " ms");
+    m_overviewLossGraph = new TimeSeriesGraphWidget("Recent Packet Loss", "%");
+    m_overviewRatesGraph = new TimeSeriesGraphWidget("Total Stream Rates", " kbps");
+    m_overviewAudioGraph = new TimeSeriesGraphWidget("Audio Buffer", " ms");
+    m_overviewAudioGraph->setPrimaryAxisSeries("Buffer");
+    overviewLayout->addWidget(m_overviewLatencyGraph, 1, 0, 1, 2);
+    overviewLayout->addWidget(m_overviewLossGraph, 1, 2, 1, 2);
+    overviewLayout->addWidget(m_overviewRatesGraph, 2, 0, 1, 2);
+    overviewLayout->addWidget(m_overviewAudioGraph, 2, 2, 1, 2);
+
+    auto makeGraphTab = [tabs](const QString& tabName, TimeSeriesGraphWidget** graph,
+                               const QString& title, const QString& suffix) {
+        auto* page = new QWidget;
+        auto* layout = new QVBoxLayout(page);
+        layout->setContentsMargins(8, 8, 8, 8);
+        *graph = new TimeSeriesGraphWidget(title, suffix, page);
+        layout->addWidget(*graph);
+        tabs->addTab(page, tabName);
+    };
+    makeGraphTab("Latency", &m_latencyGraph, "Latency, Arrival Gap, and Jitter", " ms");
+    makeGraphTab("Rates", &m_ratesGraph, "Incoming Stream Rates", " kbps");
+    makeGraphTab("Packet Loss", &m_lossGraph, "Packet Loss by Stream", "%");
+    makeGraphTab("Audio", &m_audioGraph, "Playback Buffer", " ms");
+    m_audioGraph->setPrimaryAxisSeries("Buffer");
+
     // ── Close button ─────────────────────────────────────────────────────
     auto* closeBtn = new QPushButton("Close");
     closeBtn->setFixedWidth(80);
@@ -225,14 +689,10 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngin
     root->addLayout(btnRow);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
-    // Snapshot initial byte counts for rate calculation
-    m_lastRxBytes = m_model->rxBytes();
-    m_lastTxBytes = m_model->txBytes();
-    m_lastAudioUnderrunCount = m_audio ? m_audio->rxBufferUnderrunCount() : 0;
-    for (int i = 0; i < PanadapterStream::CatCount; ++i)
-        m_lastCatBytes[i] = m_model->categoryStats(static_cast<PanadapterStream::StreamCategory>(i)).bytes;
-
     // Refresh every second
+    connect(m_rangeCombo, &QComboBox::currentIndexChanged, this, [this] {
+        updateCharts();
+    });
     connect(&m_refreshTimer, &QTimer::timeout, this, &NetworkDiagnosticsDialog::refresh);
     m_refreshTimer.start(1000);
     refresh();
@@ -240,15 +700,35 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model, AudioEngin
 
 static QString formatDrop(const PanadapterStream::CategoryStats& cs)
 {
-    if (cs.packets == 0) return "0 / 0";
+    if (cs.packets == 0) {
+        return "0 / 0";
+    }
     const double pct = (cs.errors * 100.0) / cs.packets;
     return QString("%1 / %2 (%3%)").arg(cs.errors).arg(cs.packets).arg(pct, 0, 'f', 2);
 }
 
-static QString formatRate(qint64 bytesDelta)
+static double lossPercent(const PanadapterStream::CategoryStats& cs)
 {
-    const int kbps = static_cast<int>((bytesDelta * 8) / 1000);
-    return QString("%1 kbps").arg(kbps);
+    if (cs.packets <= 0) {
+        return 0.0;
+    }
+    return (cs.errors * 100.0) / cs.packets;
+}
+
+static double kbpsFromBytes(qint64 bytesDelta)
+{
+    return (bytesDelta * 8.0) / 1000.0;
+}
+
+static double audioBufferMs(qsizetype bytes, int sampleRate)
+{
+    if (sampleRate <= 0) {
+        return 0.0;
+    }
+
+    static constexpr int kStereoChannels = 2;
+    static constexpr int kFloatBytesPerSample = 4;
+    return (bytes * 1000.0) / (sampleRate * kStereoChannels * kFloatBytesPerSample);
 }
 
 static QString formatAudioBuffer(qsizetype bytes, int sampleRate)
@@ -257,9 +737,7 @@ static QString formatAudioBuffer(qsizetype bytes, int sampleRate)
         return QString("%1 bytes").arg(bytes);
     }
 
-    static constexpr int kStereoChannels = 2;
-    static constexpr int kFloatBytesPerSample = 4;
-    const double ms = (bytes * 1000.0) / (sampleRate * kStereoChannels * kFloatBytesPerSample);
+    const double ms = audioBufferMs(bytes, sampleRate);
     return QString("%1 bytes (%2 ms)").arg(bytes).arg(ms, 0, 'f', 1);
 }
 
@@ -268,8 +746,145 @@ static QString formatMsValue(int value)
     return value < 1 ? "< 1 ms" : QString("%1 ms").arg(value);
 }
 
+NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEngine* audio, QObject* parent)
+    : QObject(parent)
+    , m_model(model)
+    , m_audio(audio)
+{
+    m_lastRxBytes = m_model->rxBytes();
+    m_lastTxBytes = m_model->txBytes();
+    m_lastSampleMs = QDateTime::currentMSecsSinceEpoch();
+    m_lastAudioUnderrunCount = m_audio ? m_audio->rxBufferUnderrunCount() : 0;
+    for (int i = 0; i < PanadapterStream::CatCount; ++i) {
+        m_lastCatBytes[i] = m_model->categoryStats(static_cast<PanadapterStream::StreamCategory>(i)).bytes;
+    }
+
+    connect(&m_sampleTimer, &QTimer::timeout, this, [this] {
+        sampleNow();
+    });
+    m_sampleTimer.start(1000);
+    sampleNow();
+}
+
+NetworkDiagnosticsSample NetworkDiagnosticsHistory::latestSample() const
+{
+    return m_samples.isEmpty() ? NetworkDiagnosticsSample{} : m_samples.last();
+}
+
+void NetworkDiagnosticsHistory::sampleNow()
+{
+    NetworkDiagnosticsSample sample;
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    sample.timestampMs = nowMs;
+    sample.rttMs = m_model->lastPingRtt();
+
+    static constexpr PanadapterStream::StreamCategory cats[] = {
+        PanadapterStream::CatAudio, PanadapterStream::CatFFT,
+        PanadapterStream::CatWaterfall, PanadapterStream::CatMeter
+    };
+
+    for (PanadapterStream::StreamCategory cat : cats) {
+        PanadapterStream::CategoryStats cs = m_model->categoryStats(cat);
+        const qint64 delta = cs.bytes - m_lastCatBytes[cat];
+        m_lastCatBytes[cat] = cs.bytes;
+        const double rateKbps = kbpsFromBytes(delta);
+        if (cat == PanadapterStream::CatAudio) {
+            sample.audioKbps = rateKbps;
+            sample.audioLossPct = lossPercent(cs);
+        } else if (cat == PanadapterStream::CatFFT) {
+            sample.fftKbps = rateKbps;
+            sample.fftLossPct = lossPercent(cs);
+        } else if (cat == PanadapterStream::CatWaterfall) {
+            sample.waterfallKbps = rateKbps;
+            sample.waterfallLossPct = lossPercent(cs);
+        } else if (cat == PanadapterStream::CatMeter) {
+            sample.meterKbps = rateKbps;
+            sample.meterLossPct = lossPercent(cs);
+        }
+    }
+
+    {
+        PanadapterStream::CategoryStats cs = m_model->categoryStats(PanadapterStream::CatDAX);
+        const qint64 delta = cs.bytes - m_lastCatBytes[PanadapterStream::CatDAX];
+        m_lastCatBytes[PanadapterStream::CatDAX] = cs.bytes;
+        sample.daxKbps = kbpsFromBytes(delta);
+        sample.daxLossPct = lossPercent(cs);
+    }
+
+    const qint64 curRx = m_model->rxBytes();
+    sample.rxKbps = kbpsFromBytes(curRx - m_lastRxBytes);
+    m_lastRxBytes = curRx;
+    const qint64 curTx = m_model->txBytes();
+    sample.txKbps = kbpsFromBytes(curTx - m_lastTxBytes);
+    m_lastTxBytes = curTx;
+
+    sample.packetLossPct = m_model->packetLossPercent();
+
+    if (m_audio) {
+        const int sampleRate = m_audio->rxBufferSampleRate();
+        const quint64 underruns = m_audio->rxBufferUnderrunCount();
+        quint64 underrunDelta = 0;
+        if (underruns >= m_lastAudioUnderrunCount) {
+            underrunDelta = underruns - m_lastAudioUnderrunCount;
+        }
+        const double elapsedSeconds = std::max(0.001, (nowMs - m_lastSampleMs) / 1000.0);
+        m_lastAudioUnderrunCount = underruns;
+        sample.audioGapMs = m_model->audioPacketGapMs();
+        sample.audioJitterMs = m_model->audioPacketJitterMs();
+        sample.audioBufferMs = audioBufferMs(m_audio->rxBufferBytes(), sampleRate);
+        sample.underrunsPerSecond = static_cast<double>(underrunDelta) / elapsedSeconds;
+    }
+    m_lastSampleMs = nowMs;
+
+    m_samples.push_back(sample);
+    pruneSamples(nowMs);
+}
+
+void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
+{
+    static constexpr qint64 kMaxHistoryMs = 7LL * 24 * 60 * 60 * 1000;
+    static constexpr qint64 kRawHistoryMs = 60LL * 60 * 1000;
+    const qint64 cutoff = nowMs - kMaxHistoryMs;
+    const qint64 rawCutoff = nowMs - kRawHistoryMs;
+    QVector<NetworkDiagnosticsSample> compacted;
+    compacted.reserve(m_samples.size());
+
+    qint64 lastMinuteBucket = -1;
+    for (const NetworkDiagnosticsSample& sample : m_samples) {
+        if (sample.timestampMs < cutoff) {
+            continue;
+        }
+        if (sample.timestampMs >= rawCutoff) {
+            compacted.push_back(sample);
+            continue;
+        }
+
+        const qint64 minuteBucket = sample.timestampMs / 60000;
+        if (minuteBucket != lastMinuteBucket) {
+            compacted.push_back(sample);
+            lastMinuteBucket = minuteBucket;
+        } else if (!compacted.isEmpty()) {
+            NetworkDiagnosticsSample& bucket = compacted.last();
+            bucket.rttMs = std::max(bucket.rttMs, sample.rttMs);
+            bucket.audioGapMs = std::max(bucket.audioGapMs, sample.audioGapMs);
+            bucket.audioJitterMs = std::max(bucket.audioJitterMs, sample.audioJitterMs);
+            bucket.packetLossPct = std::max(bucket.packetLossPct, sample.packetLossPct);
+            bucket.audioLossPct = std::max(bucket.audioLossPct, sample.audioLossPct);
+            bucket.fftLossPct = std::max(bucket.fftLossPct, sample.fftLossPct);
+            bucket.waterfallLossPct = std::max(bucket.waterfallLossPct, sample.waterfallLossPct);
+            bucket.meterLossPct = std::max(bucket.meterLossPct, sample.meterLossPct);
+            bucket.daxLossPct = std::max(bucket.daxLossPct, sample.daxLossPct);
+            bucket.audioBufferMs = sample.audioBufferMs;
+            bucket.underrunsPerSecond = std::max(bucket.underrunsPerSecond, sample.underrunsPerSecond);
+        }
+    }
+    m_samples = std::move(compacted);
+}
+
 void NetworkDiagnosticsDialog::refresh()
 {
+    const NetworkDiagnosticsSample sample = m_history ? m_history->latestSample() : NetworkDiagnosticsSample{};
+
     // Status and RTT
     m_statusLabel->setText(m_model->networkQuality());
     m_targetIpLabel->setText(m_model->targetRadioIp().isEmpty()
@@ -282,6 +897,8 @@ void NetworkDiagnosticsDialog::refresh()
 
     const int rtt = m_model->lastPingRtt();
     m_rttLabel->setText(rtt < 1 ? "< 1 ms" : QString("%1 ms").arg(rtt));
+    m_overviewStatusValue->setText(m_model->networkQuality());
+    m_overviewLatencyValue->setText(rtt < 1 ? "< 1 ms" : QString("%1 ms").arg(rtt));
 
     const int maxRtt = m_model->maxPingRtt();
     m_maxRttLabel->setText(maxRtt < 1 ? "< 1 ms" : QString("%1 ms").arg(maxRtt));
@@ -295,29 +912,31 @@ void NetworkDiagnosticsDialog::refresh()
     QLabel* dropLabels[] = { m_audioDropLabel, m_fftDropLabel, m_wfDropLabel, m_meterDropLabel };
 
     for (int i = 0; i < 4; ++i) {
-        auto cs = m_model->categoryStats(cats[i]);
-        const qint64 delta = cs.bytes - m_lastCatBytes[cats[i]];
-        rateLabels[i]->setText(formatRate(delta));
-        m_lastCatBytes[cats[i]] = cs.bytes;
+        PanadapterStream::CategoryStats cs = m_model->categoryStats(cats[i]);
+        double rateKbps = 0.0;
+        if (cats[i] == PanadapterStream::CatAudio) {
+            rateKbps = sample.audioKbps;
+        } else if (cats[i] == PanadapterStream::CatFFT) {
+            rateKbps = sample.fftKbps;
+        } else if (cats[i] == PanadapterStream::CatWaterfall) {
+            rateKbps = sample.waterfallKbps;
+        } else if (cats[i] == PanadapterStream::CatMeter) {
+            rateKbps = sample.meterKbps;
+        }
+        rateLabels[i]->setText(QString("%1 kbps").arg(static_cast<int>(rateKbps)));
         dropLabels[i]->setText(formatDrop(cs));
     }
 
     // DAX traffic
     {
-        auto cs = m_model->categoryStats(PanadapterStream::CatDAX);
-        const qint64 delta = cs.bytes - m_lastCatBytes[PanadapterStream::CatDAX];
-        m_daxRateLabel->setText(formatRate(delta));
-        m_lastCatBytes[PanadapterStream::CatDAX] = cs.bytes;
+        PanadapterStream::CategoryStats cs = m_model->categoryStats(PanadapterStream::CatDAX);
+        m_daxRateLabel->setText(QString("%1 kbps").arg(static_cast<int>(sample.daxKbps)));
         m_daxDropLabel->setText(formatDrop(cs));
     }
 
     // Total RX: all UDP bytes received on our VITA-49 socket
-    const qint64 curRx = m_model->rxBytes();
-    m_rxRateLabel->setText(formatRate(curRx - m_lastRxBytes));
-    m_lastRxBytes = curRx;
-    const qint64 curTx = m_model->txBytes();
-    m_txRateLabel->setText(formatRate(curTx - m_lastTxBytes));
-    m_lastTxBytes = curTx;
+    m_rxRateLabel->setText(QString("%1 kbps").arg(static_cast<int>(sample.rxKbps)));
+    m_txRateLabel->setText(QString("%1 kbps").arg(static_cast<int>(sample.txKbps)));
 
     // Total dropped (across all owned streams)
     const int dropped = m_model->packetDropCount();
@@ -327,6 +946,7 @@ void NetworkDiagnosticsDialog::refresh()
         const int windowPackets = m_model->packetLossWindowPackets();
         const int windowDrops = m_model->packetLossWindowDrops();
         const double windowPct = m_model->packetLossPercent();
+        m_overviewLossValue->setText(QString("%1%").arg(windowPct, 0, 'f', 2));
         m_droppedLabel->setText(
             QString("Last %1s: %2 / %3 dropped (%4%)   Total: %5 / %6 dropped (%7%)")
                 .arg(m_model->packetLossWindowSeconds())
@@ -336,16 +956,17 @@ void NetworkDiagnosticsDialog::refresh()
                 .arg(dropped).arg(total).arg(pct, 0, 'f', 2));
     } else {
         m_droppedLabel->setText("No packets received yet");
+        m_overviewLossValue->setText("0.00%");
     }
 
     if (m_audio) {
         const int sampleRate = m_audio->rxBufferSampleRate();
         const quint64 underruns = m_audio->rxBufferUnderrunCount();
         m_audioBufferLabel->setText(formatAudioBuffer(m_audio->rxBufferBytes(), sampleRate));
+        m_overviewAudioValue->setText(QString("%1 ms").arg(audioBufferMs(m_audio->rxBufferBytes(), sampleRate), 0, 'f', 1));
         m_audioBufferPeakLabel->setText(formatAudioBuffer(m_audio->rxBufferPeakBytes(), sampleRate));
         m_audioUnderrunLabel->setText(QString::number(underruns));
-        m_audioUnderrunRateLabel->setText(QString::number(underruns - m_lastAudioUnderrunCount));
-        m_lastAudioUnderrunCount = underruns;
+        m_audioUnderrunRateLabel->setText(QString::number(sample.underrunsPerSecond, 'f', 0));
 
         m_audioPacketGapLabel->setText(formatMsValue(m_model->audioPacketGapMs()));
         m_audioPacketGapMaxLabel->setText(formatMsValue(m_model->audioPacketGapMaxMs()));
@@ -358,20 +979,139 @@ void NetworkDiagnosticsDialog::refresh()
         m_audioPacketGapLabel->setText("Unavailable");
         m_audioPacketGapMaxLabel->setText("Unavailable");
         m_audioJitterLabel->setText("Unavailable");
+        m_overviewAudioValue->setText("Unavailable");
     }
 
     // Color the status label
     const QString q = m_model->networkQuality();
-    if (q == "Excellent" || q == "Very Good")
+    if (q == "Excellent" || q == "Very Good") {
         m_statusLabel->setStyleSheet("QLabel { color: #00cc66; font-weight: bold; }");
-    else if (q == "Good")
+        m_overviewStatusValue->setStyleSheet("QLabel { color: #00cc66; font-weight: bold; font-size: 18px; }");
+    } else if (q == "Good") {
         m_statusLabel->setStyleSheet("QLabel { color: #88cc00; font-weight: bold; }");
-    else if (q == "Fair")
+        m_overviewStatusValue->setStyleSheet("QLabel { color: #88cc00; font-weight: bold; font-size: 18px; }");
+    } else if (q == "Fair") {
         m_statusLabel->setStyleSheet("QLabel { color: #ccaa00; font-weight: bold; }");
-    else if (q == "Poor")
+        m_overviewStatusValue->setStyleSheet("QLabel { color: #ccaa00; font-weight: bold; font-size: 18px; }");
+    } else if (q == "Poor") {
         m_statusLabel->setStyleSheet("QLabel { color: #cc3300; font-weight: bold; }");
-    else
+        m_overviewStatusValue->setStyleSheet("QLabel { color: #cc3300; font-weight: bold; font-size: 18px; }");
+    } else {
         m_statusLabel->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; }");
+        m_overviewStatusValue->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; font-size: 18px; }");
+    }
+
+    updateCharts();
+}
+
+int NetworkDiagnosticsDialog::selectedRangeSeconds() const
+{
+    if (!m_rangeCombo) {
+        return 5 * 60;
+    }
+    return m_rangeCombo->currentData().toInt();
+}
+
+void NetworkDiagnosticsDialog::updateCharts()
+{
+    const int rangeSeconds = selectedRangeSeconds();
+    const qint64 bucketMs = rangeSeconds <= 5 * 60
+        ? 1000
+        : std::max<qint64>(5000, (static_cast<qint64>(rangeSeconds) * 1000) / 300);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const qint64 endMs = rangeSeconds <= 5 * 60 ? nowMs : (nowMs / bucketMs) * bucketMs;
+    const qint64 cutoffMs = endMs - static_cast<qint64>(rangeSeconds) * 1000;
+    static const QVector<NetworkDiagnosticsSample> kEmptySamples;
+    const QVector<NetworkDiagnosticsSample>& samples = m_history ? m_history->samples() : kEmptySamples;
+
+    auto buildSeries = [&](const QString& label, const QColor& color, auto valueFor) {
+        TimeSeriesGraphWidget::Series series{label, color, {}, {}};
+        series.points.reserve(samples.size());
+        if (bucketMs <= 1000) {
+            for (const NetworkDiagnosticsSample& sample : samples) {
+                if (sample.timestampMs < cutoffMs || sample.timestampMs > endMs) {
+                    continue;
+                }
+                const double secondsFromStart = (sample.timestampMs - cutoffMs) / 1000.0;
+                series.points.push_back(QPointF(secondsFromStart,
+                                               std::max(0.0, static_cast<double>(valueFor(sample)))));
+            }
+        } else {
+            qint64 currentBucket = -1;
+            double bucketSum = 0.0;
+            int bucketCount = 0;
+            auto flushBucket = [&] {
+                if (currentBucket < 0 || bucketCount <= 0) {
+                    return;
+                }
+                const qint64 bucketCenterMs = currentBucket * bucketMs + bucketMs / 2;
+                const double secondsFromStart = (bucketCenterMs - cutoffMs) / 1000.0;
+                series.points.push_back(QPointF(secondsFromStart, bucketSum / bucketCount));
+                bucketSum = 0.0;
+                bucketCount = 0;
+            };
+            for (const NetworkDiagnosticsSample& sample : samples) {
+                if (sample.timestampMs < cutoffMs || sample.timestampMs > endMs) {
+                    continue;
+                }
+                const qint64 sampleBucket = sample.timestampMs / bucketMs;
+                if (currentBucket != sampleBucket) {
+                    flushBucket();
+                    currentBucket = sampleBucket;
+                }
+                bucketSum += std::max(0.0, static_cast<double>(valueFor(sample)));
+                ++bucketCount;
+            }
+            flushBucket();
+        }
+        return series;
+    };
+    auto buildSeriesWithUnit = [&](const QString& label,
+                                   const QColor& color,
+                                   const QString& unitSuffix,
+                                   auto valueFor) {
+        TimeSeriesGraphWidget::Series series = buildSeries(label, color, valueFor);
+        series.unitSuffix = unitSuffix;
+        return series;
+    };
+
+    QVector<TimeSeriesGraphWidget::Series> latencySeries{
+        buildSeriesWithUnit("RTT", QColor("#00b4d8"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.rttMs); }),
+        buildSeriesWithUnit("Arrival gap", QColor("#f2c94c"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioGapMs); }),
+        buildSeriesWithUnit("Jitter", QColor("#eb5757"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioJitterMs); })
+    };
+    QVector<TimeSeriesGraphWidget::Series> rateSeries{
+        buildSeriesWithUnit("RX total", QColor("#00b4d8"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.rxKbps; }),
+        buildSeriesWithUnit("Audio", QColor("#6fcf97"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.audioKbps; }),
+        buildSeriesWithUnit("FFT", QColor("#bb6bd9"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.fftKbps; }),
+        buildSeriesWithUnit("Waterfall", QColor("#f2994a"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.waterfallKbps; }),
+        buildSeriesWithUnit("Meters", QColor("#56ccf2"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.meterKbps; }),
+        buildSeriesWithUnit("DAX", QColor("#bdbdbd"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.daxKbps; })
+    };
+    QVector<TimeSeriesGraphWidget::Series> lossSeries{
+        buildSeriesWithUnit("Recent total", QColor("#eb5757"), "%", [](const NetworkDiagnosticsSample& s) { return s.packetLossPct; }),
+        buildSeriesWithUnit("Audio", QColor("#6fcf97"), "%", [](const NetworkDiagnosticsSample& s) { return s.audioLossPct; }),
+        buildSeriesWithUnit("FFT", QColor("#bb6bd9"), "%", [](const NetworkDiagnosticsSample& s) { return s.fftLossPct; }),
+        buildSeriesWithUnit("Waterfall", QColor("#f2994a"), "%", [](const NetworkDiagnosticsSample& s) { return s.waterfallLossPct; }),
+        buildSeriesWithUnit("Meters", QColor("#56ccf2"), "%", [](const NetworkDiagnosticsSample& s) { return s.meterLossPct; }),
+        buildSeriesWithUnit("DAX", QColor("#bdbdbd"), "%", [](const NetworkDiagnosticsSample& s) { return s.daxLossPct; })
+    };
+    QVector<TimeSeriesGraphWidget::Series> audioBufferSeries{
+        buildSeriesWithUnit("Buffer", QColor("#00b4d8"), " ms", [](const NetworkDiagnosticsSample& s) { return s.audioBufferMs; }),
+        buildSeriesWithUnit("Underruns", QColor("#eb5757"), "/s", [](const NetworkDiagnosticsSample& s) { return s.underrunsPerSecond; })
+    };
+
+    m_overviewLatencyGraph->setSeries(latencySeries, rangeSeconds);
+    m_overviewLossGraph->setSeries({lossSeries.first()}, rangeSeconds);
+    m_overviewRatesGraph->setSeries({
+        buildSeriesWithUnit("RX total", QColor("#00b4d8"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.rxKbps; }),
+        buildSeriesWithUnit("TX total", QColor("#f2c94c"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.txKbps; })
+    }, rangeSeconds);
+    m_overviewAudioGraph->setSeries(audioBufferSeries, rangeSeconds);
+    m_latencyGraph->setSeries(latencySeries, rangeSeconds);
+    m_ratesGraph->setSeries(rateSeries, rangeSeconds);
+    m_lossGraph->setSeries(lossSeries, rangeSeconds);
+    m_audioGraph->setSeries(audioBufferSeries, rangeSeconds);
 }
 
 } // namespace AetherSDR

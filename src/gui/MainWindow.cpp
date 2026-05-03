@@ -110,6 +110,7 @@
 #include <QPropertyAnimation>
 #include <QIcon>
 #include <QKeyEvent>
+#include <QHelpEvent>
 #include <QWindow>
 #include <QPixmap>
 #include <QWidgetAction>
@@ -149,6 +150,7 @@
 #include <QComboBox>
 #include <QProgressDialog>
 #include <QThread>
+#include <QToolTip>
 #include "core/AppSettings.h"
 #include "core/SpotCommandPolicy.h"
 #ifdef HAVE_RADE
@@ -949,6 +951,7 @@ MainWindow::MainWindow(QWidget* parent)
     // AudioEngine so its tap hook picks it up on the audio thread.
     m_puduMonitor = new ClientPuduMonitor(this);
     m_audio->setTxPostDspMonitor(m_puduMonitor);
+    m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
 
     // Local CW sidetone — every key source (serial, MIDI, TCI, CWX, HID)
     // funnels through RadioModel::sendCwKey/sendCwPaddle, which emits
@@ -3787,6 +3790,16 @@ MainWindow::~MainWindow()
     if (m_radeSliceId >= 0)
         deactivateRADE();
 #endif
+    // Network diagnostics polls AudioEngine once per second. Destroy the
+    // modeless dialog before the audio worker is torn down so no queued refresh
+    // can read a dead audio object during application shutdown.
+    if (m_networkDiagnosticsDialog) {
+        delete m_networkDiagnosticsDialog.data();
+        m_networkDiagnosticsDialog = nullptr;
+    }
+    delete m_networkDiagnosticsHistory;
+    m_networkDiagnosticsHistory = nullptr;
+
     // Stop audio processing on the worker thread before destruction (#502).
     // Use BlockingQueuedConnection to ensure completion before we proceed.
     if (m_audio && m_audioThread && m_audioThread->isRunning()) {
@@ -4291,7 +4304,7 @@ void MainWindow::keyReleaseEvent(QKeyEvent* event)
 void MainWindow::showNetworkDiagnosticsDialog()
 {
     if (!m_networkDiagnosticsDialog) {
-        auto* dlg = new NetworkDiagnosticsDialog(&m_radioModel, m_audio, this);
+        auto* dlg = new NetworkDiagnosticsDialog(&m_radioModel, m_audio, m_networkDiagnosticsHistory, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setModal(false);
         dlg->setWindowModality(Qt::NonModal);
@@ -4696,6 +4709,21 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     }
     if (obj == m_networkLabel && event->type() == QEvent::MouseButtonDblClick) {
         showNetworkDiagnosticsDialog();
+        return true;
+    }
+    if (obj == m_networkLabel && event->type() == QEvent::Enter) {
+        m_networkTooltipRefreshTimer.start();
+    }
+    if (obj == m_networkLabel && event->type() == QEvent::Leave) {
+        m_networkTooltipRefreshTimer.stop();
+        QToolTip::hideText();
+    }
+    if (obj == m_networkLabel && event->type() == QEvent::ToolTip) {
+        const QString tooltip = buildNetworkTooltip(m_radioModel);
+        m_networkLabel->setToolTip(tooltip);
+        auto* helpEvent = static_cast<QHelpEvent*>(event);
+        QToolTip::showText(helpEvent->globalPos(), tooltip, m_networkLabel);
+        m_networkTooltipRefreshTimer.start();
         return true;
     }
     if (obj == m_stationNickLabel && event->type() == QEvent::MouseButtonDblClick) {
@@ -6832,6 +6860,17 @@ void MainWindow::buildUI()
     m_networkLabel->setAlignment(Qt::AlignCenter);
     m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel));
     m_networkLabel->installEventFilter(this);
+    m_networkTooltipRefreshTimer.setInterval(1000);
+    connect(&m_networkTooltipRefreshTimer, &QTimer::timeout, this, [this] {
+        if (!m_networkLabel || !m_networkLabel->underMouse()) {
+            m_networkTooltipRefreshTimer.stop();
+            return;
+        }
+        const QString tooltip = buildNetworkTooltip(m_radioModel);
+        m_networkLabel->setToolTip(tooltip);
+        const QPoint pos = m_networkLabel->mapToGlobal(QPoint(m_networkLabel->width() / 2, 0));
+        QToolTip::showText(pos, tooltip, m_networkLabel);
+    });
     netVbox->addWidget(m_networkLabel);
     hbox->addWidget(netStack);
 
