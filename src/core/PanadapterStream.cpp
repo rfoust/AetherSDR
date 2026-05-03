@@ -106,7 +106,7 @@ void PanadapterStream::init()
         const QByteArray cmd = QStringLiteral("client udp_register handle=0x%1").arg(hex).toUtf8();
         const qint64 sent = m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
         if (sent > 0)
-            m_totalTxBytes += sent;
+            m_totalTxBytes.fetch_add(sent);
     });
 
     // WAN ping keepalive: send "client ping handle=0x<handle>" every 5s
@@ -116,9 +116,9 @@ void PanadapterStream::init()
         const QString hex = QString::number(m_wanClientHandle, 16).toUpper();
         const QByteArray cmd = QStringLiteral("client ping handle=0x%1").arg(hex).toUtf8();
         m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
-        m_totalTxBytes += cmd.size();
+        m_totalTxBytes.fetch_add(cmd.size());
         qCDebug(lcVita49) << "PanadapterStream: WAN ping keepalive"
-                 << "(totalRx:" << m_totalRxBytes << "bytes)";
+                 << "(totalRx:" << m_totalRxBytes.load() << "bytes)";
     });
 
     connect(m_routedPrimeTimer, &QTimer::timeout, this, [this] {
@@ -131,7 +131,7 @@ void PanadapterStream::init()
         const QByteArray reg(1, '\x00');
         const qint64 sent = m_socket->writeDatagram(reg, m_radioAddress, 4992);
         if (sent > 0)
-            m_totalTxBytes += sent;
+            m_totalTxBytes.fetch_add(sent);
     });
 }
 
@@ -191,7 +191,7 @@ bool PanadapterStream::start(RadioConnection* conn)
         const QByteArray reg(1, '\x00');
         const qint64 sent = m_socket->writeDatagram(reg, radioAddr, 4992);
         if (sent == 1) {
-            m_totalTxBytes += sent;
+            m_totalTxBytes.fetch_add(sent);
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
                               << radioAddr.toString() << ":4992";
             m_routedPrimeElapsed.restart();
@@ -267,7 +267,7 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
         const QByteArray reg(1, '\x00');
         const qint64 sent = m_socket->writeDatagram(reg, m_radioAddress, 4992);
         if (sent == 1) {
-            m_totalTxBytes += sent;
+            m_totalTxBytes.fetch_add(sent);
             qCDebug(lcVita49) << "PanadapterStream: sent UDP registration to"
                               << m_radioAddress.toString() << ":4992";
             m_routedPrimeElapsed.restart();
@@ -332,7 +332,7 @@ void PanadapterStream::startWanUdpRegister(quint32 clientHandle)
     const QByteArray cmd = QStringLiteral("client udp_register handle=0x%1").arg(hex).toUtf8();
     const qint64 sent = m_socket->writeDatagram(cmd, m_radioAddress, m_radioPort);
     if (sent > 0)
-        m_totalTxBytes += sent;
+        m_totalTxBytes.fetch_add(sent);
     m_wanRegisterTimer->start(50);
 }
 
@@ -461,7 +461,7 @@ void PanadapterStream::onDatagramReady()
                     m_wanPingTimer->start(5000);
                 }
             }
-            m_totalRxBytes += dg.data().size();
+            m_totalRxBytes.fetch_add(dg.data().size());
             processDatagram(dg.data());
         }
     }
@@ -548,6 +548,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     // Per-category byte/packet/sequence tracking.
     // Only track owned/routed streams — skip uncategorized packets. (#455)
     if (cat != CatCount) {
+        QMutexLocker statsLock(&m_statsMutex);
         m_catStats[cat].bytes += data.size();
         m_catStats[cat].packets++;
         auto& stats = m_streamStats[streamId];
@@ -966,6 +967,7 @@ void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool ha
 
 int PanadapterStream::packetErrorCount() const
 {
+    QMutexLocker lock(&m_statsMutex);
     int total = 0;
     for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
         total += it->errorCount;
@@ -974,10 +976,20 @@ int PanadapterStream::packetErrorCount() const
 
 int PanadapterStream::packetTotalCount() const
 {
+    QMutexLocker lock(&m_statsMutex);
     int total = 0;
     for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
         total += it->totalCount;
     return total;
+}
+
+PanadapterStream::CategoryStats PanadapterStream::categoryStats(StreamCategory cat) const
+{
+    if (cat < 0 || cat >= CatCount) {
+        return {};
+    }
+    QMutexLocker lock(&m_statsMutex);
+    return m_catStats[cat];
 }
 
 void PanadapterStream::registerDaxStream(quint32 streamId, int channel)
@@ -1054,7 +1066,7 @@ void PanadapterStream::sendToRadio(const QByteArray& packet)
         return;
     }
     const qint64 sent = m_socket->writeDatagram(packet, m_radioAddress, m_radioPort);
-    if (sent > 0) m_totalTxBytes += sent;
+    if (sent > 0) m_totalTxBytes.fetch_add(sent);
     static int txCount = 0;
     ++txCount;
     if (txCount <= 5 || txCount % 1000 == 0) {

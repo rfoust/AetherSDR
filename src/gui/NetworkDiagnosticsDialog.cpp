@@ -236,12 +236,15 @@ private:
     QString rangeLabel() const
     {
         if (m_rangeSeconds < 3600) {
-            return QString("Last %1 minutes").arg(m_rangeSeconds / 60);
+            const int minutes = m_rangeSeconds / 60;
+            return QString("Last %1 %2").arg(minutes).arg(minutes == 1 ? "minute" : "minutes");
         }
         if (m_rangeSeconds < 86400) {
-            return QString("Last %1 hours").arg(m_rangeSeconds / 3600);
+            const int hours = m_rangeSeconds / 3600;
+            return QString("Last %1 %2").arg(hours).arg(hours == 1 ? "hour" : "hours");
         }
-        return QString("Last %1 days").arg(m_rangeSeconds / 86400);
+        const int days = m_rangeSeconds / 86400;
+        return QString("Last %1 %2").arg(days).arg(days == 1 ? "day" : "days");
     }
 
     QVector<Series> activeSeries() const
@@ -715,9 +718,12 @@ static double lossPercent(const PanadapterStream::CategoryStats& cs)
     return (cs.errors * 100.0) / cs.packets;
 }
 
-static double kbpsFromBytes(qint64 bytesDelta)
+static double kbpsFromBytes(qint64 bytesDelta, double elapsedSeconds)
 {
-    return (bytesDelta * 8.0) / 1000.0;
+    if (bytesDelta <= 0 || elapsedSeconds <= 0.0) {
+        return 0.0;
+    }
+    return (bytesDelta * 8.0) / (1000.0 * elapsedSeconds);
 }
 
 static double audioBufferMs(qsizetype bytes, int sampleRate)
@@ -775,6 +781,7 @@ void NetworkDiagnosticsHistory::sampleNow()
 {
     NetworkDiagnosticsSample sample;
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const double elapsedSeconds = std::max(0.001, (nowMs - m_lastSampleMs) / 1000.0);
     sample.timestampMs = nowMs;
     sample.rttMs = m_model->lastPingRtt();
 
@@ -785,9 +792,9 @@ void NetworkDiagnosticsHistory::sampleNow()
 
     for (PanadapterStream::StreamCategory cat : cats) {
         PanadapterStream::CategoryStats cs = m_model->categoryStats(cat);
-        const qint64 delta = cs.bytes - m_lastCatBytes[cat];
+        const qint64 delta = std::max<qint64>(0, cs.bytes - m_lastCatBytes[cat]);
         m_lastCatBytes[cat] = cs.bytes;
-        const double rateKbps = kbpsFromBytes(delta);
+        const double rateKbps = kbpsFromBytes(delta, elapsedSeconds);
         if (cat == PanadapterStream::CatAudio) {
             sample.audioKbps = rateKbps;
             sample.audioLossPct = lossPercent(cs);
@@ -805,17 +812,17 @@ void NetworkDiagnosticsHistory::sampleNow()
 
     {
         PanadapterStream::CategoryStats cs = m_model->categoryStats(PanadapterStream::CatDAX);
-        const qint64 delta = cs.bytes - m_lastCatBytes[PanadapterStream::CatDAX];
+        const qint64 delta = std::max<qint64>(0, cs.bytes - m_lastCatBytes[PanadapterStream::CatDAX]);
         m_lastCatBytes[PanadapterStream::CatDAX] = cs.bytes;
-        sample.daxKbps = kbpsFromBytes(delta);
+        sample.daxKbps = kbpsFromBytes(delta, elapsedSeconds);
         sample.daxLossPct = lossPercent(cs);
     }
 
     const qint64 curRx = m_model->rxBytes();
-    sample.rxKbps = kbpsFromBytes(curRx - m_lastRxBytes);
+    sample.rxKbps = kbpsFromBytes(std::max<qint64>(0, curRx - m_lastRxBytes), elapsedSeconds);
     m_lastRxBytes = curRx;
     const qint64 curTx = m_model->txBytes();
-    sample.txKbps = kbpsFromBytes(curTx - m_lastTxBytes);
+    sample.txKbps = kbpsFromBytes(std::max<qint64>(0, curTx - m_lastTxBytes), elapsedSeconds);
     m_lastTxBytes = curTx;
 
     sample.packetLossPct = m_model->packetLossPercent();
@@ -827,7 +834,6 @@ void NetworkDiagnosticsHistory::sampleNow()
         if (underruns >= m_lastAudioUnderrunCount) {
             underrunDelta = underruns - m_lastAudioUnderrunCount;
         }
-        const double elapsedSeconds = std::max(0.001, (nowMs - m_lastSampleMs) / 1000.0);
         m_lastAudioUnderrunCount = underruns;
         sample.audioGapMs = m_model->audioPacketGapMs();
         sample.audioJitterMs = m_model->audioPacketJitterMs();
@@ -850,12 +856,18 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
     compacted.reserve(m_samples.size());
 
     qint64 lastMinuteBucket = -1;
+    int bucketSampleCount = 0;
+    auto mergeAverage = [](double current, double incoming, int currentCount) {
+        return ((current * currentCount) + incoming) / (currentCount + 1);
+    };
     for (const NetworkDiagnosticsSample& sample : m_samples) {
         if (sample.timestampMs < cutoff) {
             continue;
         }
         if (sample.timestampMs >= rawCutoff) {
             compacted.push_back(sample);
+            lastMinuteBucket = -1;
+            bucketSampleCount = 0;
             continue;
         }
 
@@ -863,8 +875,16 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
         if (minuteBucket != lastMinuteBucket) {
             compacted.push_back(sample);
             lastMinuteBucket = minuteBucket;
+            bucketSampleCount = 1;
         } else if (!compacted.isEmpty()) {
             NetworkDiagnosticsSample& bucket = compacted.last();
+            bucket.rxKbps = mergeAverage(bucket.rxKbps, sample.rxKbps, bucketSampleCount);
+            bucket.txKbps = mergeAverage(bucket.txKbps, sample.txKbps, bucketSampleCount);
+            bucket.audioKbps = mergeAverage(bucket.audioKbps, sample.audioKbps, bucketSampleCount);
+            bucket.fftKbps = mergeAverage(bucket.fftKbps, sample.fftKbps, bucketSampleCount);
+            bucket.waterfallKbps = mergeAverage(bucket.waterfallKbps, sample.waterfallKbps, bucketSampleCount);
+            bucket.meterKbps = mergeAverage(bucket.meterKbps, sample.meterKbps, bucketSampleCount);
+            bucket.daxKbps = mergeAverage(bucket.daxKbps, sample.daxKbps, bucketSampleCount);
             bucket.rttMs = std::max(bucket.rttMs, sample.rttMs);
             bucket.audioGapMs = std::max(bucket.audioGapMs, sample.audioGapMs);
             bucket.audioJitterMs = std::max(bucket.audioJitterMs, sample.audioJitterMs);
@@ -876,6 +896,7 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
             bucket.daxLossPct = std::max(bucket.daxLossPct, sample.daxLossPct);
             bucket.audioBufferMs = sample.audioBufferMs;
             bucket.underrunsPerSecond = std::max(bucket.underrunsPerSecond, sample.underrunsPerSecond);
+            ++bucketSampleCount;
         }
     }
     m_samples = std::move(compacted);

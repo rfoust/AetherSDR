@@ -188,7 +188,7 @@ public:
         int    packets{0};
         int    errors{0};
     };
-    const CategoryStats& categoryStats(StreamCategory cat) const { return m_catStats[cat]; }
+    CategoryStats categoryStats(StreamCategory cat) const;
 private:
 
     // Mutex guards stream ID sets, dBm ranges, yPixels, and DAX/IQ maps.
@@ -203,21 +203,22 @@ private:
     RadioConnection* m_conn{nullptr};
     QMap<quint32, FrameAssembler> m_frames;  // per-stream FFT frame assembly
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
+    mutable QMutex m_statsMutex;
     CategoryStats m_catStats[CatCount]{};
 
 public:
     // Packet error/total counts across all owned streams (for network quality monitor).
     int packetErrorCount() const;
     int packetTotalCount() const;
-    qint64 totalRxBytes() const { return m_totalRxBytes; }
-    qint64 totalTxBytes() const { return m_totalTxBytes; }
+    qint64 totalRxBytes() const { return m_totalRxBytes.load(); }
+    qint64 totalTxBytes() const { return m_totalTxBytes.load(); }
     int audioPacketGapMs() const { return m_audioPacketGapMs.load(); }
     int audioPacketGapMaxMs() const { return m_audioPacketGapMaxMs.load(); }
     int audioPacketJitterMs() const { return m_audioPacketJitterMs.load(); }
 
 private:
-    qint64 m_totalRxBytes{0};
-    qint64 m_totalTxBytes{0};
+    std::atomic<qint64> m_totalRxBytes{0};
+    std::atomic<qint64> m_totalTxBytes{0};
     std::atomic<int> m_audioPacketGapMs{0};
     std::atomic<int> m_audioPacketGapMaxMs{0};
     std::atomic<int> m_audioPacketJitterMs{0};
