@@ -1,5 +1,6 @@
 #include "NetworkDiagnosticsDialog.h"
 #include "core/AudioEngine.h"
+#include "core/LogManager.h"
 #include "models/RadioModel.h"
 
 #include <algorithm>
@@ -9,17 +10,27 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QEvent>
+#include <QFileInfo>
+#include <QFont>
 #include <QFrame>
 #include <QGroupBox>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QCheckBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSet>
+#include <QSignalBlocker>
+#include <QStringList>
+#include <QSyntaxHighlighter>
 #include <QTabWidget>
+#include <QTextCharFormat>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -28,6 +39,79 @@ constexpr int kResizeMargin = 6;
 }
 
 namespace AetherSDR {
+
+class LogSyntaxHighlighter : public QSyntaxHighlighter {
+public:
+    explicit LogSyntaxHighlighter(QTextDocument* parent)
+        : QSyntaxHighlighter(parent)
+    {
+        m_timeFormat.setForeground(QColor("#7f98b0"));
+        m_debugFormat.setForeground(QColor("#7f98b0"));
+        m_infoFormat.setForeground(QColor("#77d8ff"));
+        m_warningFormat.setForeground(QColor("#ffd166"));
+        m_criticalFormat.setForeground(QColor("#ff6b6b"));
+        m_categoryFormat.setForeground(QColor("#c8d8e8"));
+        m_categoryFormat.setFontWeight(QFont::Bold);
+        m_numberFormat.setForeground(QColor("#8fe388"));
+        m_protocolFormat.setForeground(QColor("#d8b4ff"));
+    }
+
+protected:
+    void highlightBlock(const QString& text) override
+    {
+        static const QRegularExpression timeRe(QStringLiteral("^\\[[^\\]]+\\]"));
+        static const QRegularExpression levelRe(QStringLiteral("\\]\\s+(DBG|INF|WRN|CRT|FTL)\\s+"));
+        static const QRegularExpression categoryRe(QStringLiteral("\\]\\s+(?:DBG|INF|WRN|CRT|FTL)\\s+([^:]+):"));
+        static const QRegularExpression numberRe(QStringLiteral("\\b(?:0x[0-9a-fA-F]+|\\d+(?:\\.\\d+)?)\\b"));
+        static const QRegularExpression protocolRe(QStringLiteral("\\b(?:C\\d+|R\\d+|S[0-9a-fA-F]+|VITA-49|UDP|TCP|RX|TX)\\b"));
+
+        QRegularExpressionMatch match = timeRe.match(text);
+        if (match.hasMatch()) {
+            setFormat(match.capturedStart(), match.capturedLength(), m_timeFormat);
+        }
+
+        match = levelRe.match(text);
+        if (match.hasMatch()) {
+            const QString level = match.captured(1);
+            QTextCharFormat levelFormat = m_debugFormat;
+            if (level == "INF") {
+                levelFormat = m_infoFormat;
+            } else if (level == "WRN") {
+                levelFormat = m_warningFormat;
+            } else if (level == "CRT" || level == "FTL") {
+                levelFormat = m_criticalFormat;
+            }
+            setFormat(match.capturedStart(1), match.capturedLength(1), levelFormat);
+        }
+
+        match = categoryRe.match(text);
+        if (match.hasMatch()) {
+            setFormat(match.capturedStart(1), match.capturedLength(1), m_categoryFormat);
+        }
+
+        QRegularExpressionMatchIterator it = numberRe.globalMatch(text);
+        while (it.hasNext()) {
+            match = it.next();
+            setFormat(match.capturedStart(), match.capturedLength(), m_numberFormat);
+        }
+
+        it = protocolRe.globalMatch(text);
+        while (it.hasNext()) {
+            match = it.next();
+            setFormat(match.capturedStart(), match.capturedLength(), m_protocolFormat);
+        }
+    }
+
+private:
+    QTextCharFormat m_timeFormat;
+    QTextCharFormat m_debugFormat;
+    QTextCharFormat m_infoFormat;
+    QTextCharFormat m_warningFormat;
+    QTextCharFormat m_criticalFormat;
+    QTextCharFormat m_categoryFormat;
+    QTextCharFormat m_numberFormat;
+    QTextCharFormat m_protocolFormat;
+};
 
 class TimeSeriesGraphWidget : public QWidget {
 public:
@@ -634,6 +718,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
     auto* tabs = new QTabWidget(this);
     auto* corner = new QWidget(tabs);
+    corner->setObjectName("networkDiagnosticsTimeframeCorner");
     auto* cornerRow = new QHBoxLayout(corner);
     cornerRow->setContentsMargins(0, 0, 6, 2);
     cornerRow->setSpacing(6);
@@ -921,6 +1006,8 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     makeGraphTab("Packet Loss", &m_lossGraph, "Packet Loss by Stream", "%");
     makeGraphTab("Audio", &m_audioGraph, "Playback Buffer", " ms");
     m_audioGraph->setPrimaryAxisSeries("Buffer");
+    QWidget* logsTab = buildLogsTab();
+    tabs->addTab(logsTab, "Logs");
 
     // ── Close button ─────────────────────────────────────────────────────
     auto* closeBtn = new QPushButton("Close");
@@ -935,9 +1022,349 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     connect(m_rangeCombo, &QComboBox::currentIndexChanged, this, [this] {
         updateCharts();
     });
+    connect(tabs, &QTabWidget::currentChanged, this, [tabs, corner, logsTab](int index) {
+        corner->setVisible(tabs->widget(index) != logsTab);
+    });
     connect(&m_refreshTimer, &QTimer::timeout, this, &NetworkDiagnosticsDialog::refresh);
     m_refreshTimer.start(1000);
+    connect(&m_logRefreshTimer, &QTimer::timeout, this, &NetworkDiagnosticsDialog::appendNewLogData);
+    m_logRefreshTimer.start(500);
+    initializeLogTail();
     refresh();
+}
+
+QWidget* NetworkDiagnosticsDialog::buildLogsTab()
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(8);
+
+    auto* filterGroup = new QGroupBox("Filter Categories", page);
+    auto* filterGrid = new QGridLayout(filterGroup);
+    filterGrid->setContentsMargins(10, 14, 10, 8);
+    filterGrid->setHorizontalSpacing(12);
+    filterGrid->setVerticalSpacing(4);
+
+    auto* allCategories = new QCheckBox("General", filterGroup);
+    allCategories->setProperty("logCategory", QStringLiteral("default"));
+    allCategories->setChecked(true);
+    allCategories->setToolTip("Uncategorized Qt log output");
+    allCategories->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+    filterGrid->addWidget(allCategories, 0, 0);
+    m_logCategoryCheckboxes.push_back(allCategories);
+    m_visibleLogCategories.insert(QStringLiteral("default"));
+    connect(allCategories, &QCheckBox::toggled, this, [this](bool on) {
+        if (on) {
+            m_visibleLogCategories.insert(QStringLiteral("default"));
+        } else {
+            m_visibleLogCategories.remove(QStringLiteral("default"));
+        }
+        rebuildLogView();
+    });
+
+    const QList<LogManager::Category> categories = LogManager::instance().categories();
+    constexpr int kColumns = 4;
+    int index = 1;
+    for (const LogManager::Category& category : categories) {
+        auto* checkbox = new QCheckBox(category.label, filterGroup);
+        checkbox->setProperty("logCategory", category.id);
+        checkbox->setChecked(true);
+        checkbox->setToolTip(QString("%1\nCategory: %2").arg(category.description, category.id));
+        checkbox->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+        m_logCategoryCheckboxes.push_back(checkbox);
+        m_visibleLogCategories.insert(category.id);
+        filterGrid->addWidget(checkbox, index / kColumns, index % kColumns);
+        connect(checkbox, &QCheckBox::toggled, this, [this, id = category.id](bool on) {
+            if (on) {
+                m_visibleLogCategories.insert(id);
+            } else {
+                m_visibleLogCategories.remove(id);
+            }
+            rebuildLogView();
+        });
+        ++index;
+    }
+    layout->addWidget(filterGroup);
+
+    auto* filterButtonRow = new QHBoxLayout;
+    auto* selectAllBtn = new QPushButton("Select All", page);
+    auto* deselectAllBtn = new QPushButton("Deselect All", page);
+    selectAllBtn->setFixedHeight(24);
+    deselectAllBtn->setFixedHeight(24);
+    connect(selectAllBtn, &QPushButton::clicked, this, [this]() {
+        setAllLogCategoriesVisible(true);
+    });
+    connect(deselectAllBtn, &QPushButton::clicked, this, [this]() {
+        setAllLogCategoriesVisible(false);
+    });
+    filterButtonRow->addWidget(selectAllBtn);
+    filterButtonRow->addWidget(deselectAllBtn);
+    filterButtonRow->addStretch();
+    layout->addLayout(filterButtonRow);
+
+    auto* infoRow = new QHBoxLayout;
+    m_logPathLabel = new QLabel(page);
+    m_logPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_logPathLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+    infoRow->addWidget(m_logPathLabel, 1);
+
+    m_logLiveToggle = new QPushButton("Live", page);
+    m_logLiveToggle->setCheckable(true);
+    m_logLiveToggle->setChecked(true);
+    m_logLiveToggle->setFixedWidth(92);
+    m_logLiveToggle->setToolTip("Live follows the newest log output. Turn it off to inspect older lines.");
+    m_logLiveToggle->setStyleSheet(
+        "QPushButton { background: #1a2030; color: #c8d8e8; border: 1px solid #203040; "
+        "border-radius: 4px; padding: 3px 8px; }"
+        "QPushButton:checked { background: #00607a; color: #e0f0ff; border-color: #00b4d8; }");
+    connect(m_logLiveToggle, &QPushButton::toggled, this, [this](bool live) {
+        setLogFollowLive(live);
+    });
+    infoRow->addWidget(m_logLiveToggle);
+    layout->addLayout(infoRow);
+
+    m_logViewer = new QPlainTextEdit(page);
+    m_logViewer->setReadOnly(true);
+    m_logViewer->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_logViewer->setMaximumBlockCount(2500);
+    m_logViewer->setStyleSheet(
+        "QPlainTextEdit { background: #0a0a14; color: #a0b0c0; "
+        "font-family: monospace; font-size: 11px; border: 1px solid #203040; }");
+    new LogSyntaxHighlighter(m_logViewer->document());
+    layout->addWidget(m_logViewer, 1);
+
+    connect(m_logViewer->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
+        if (m_handlingLogScroll || !m_logViewer) {
+            return;
+        }
+        if (value < m_logViewer->verticalScrollBar()->maximum()) {
+            setLogFollowLive(false);
+        }
+    });
+
+    return page;
+}
+
+void NetworkDiagnosticsDialog::initializeLogTail()
+{
+    const QString logPath = LogManager::instance().logFilePath();
+    if (m_logPathLabel) {
+        m_logPathLabel->setText(QString("Log: %1").arg(logPath));
+    }
+
+    m_logFile.close();
+    m_logFile.setFileName(logPath);
+    m_logOffset = 0;
+    m_logPartialLine.clear();
+    m_logLines.clear();
+
+    if (!reopenLogFile(false)) {
+        rebuildLogView();
+        return;
+    }
+
+    static constexpr qint64 kInitialTailBytes = 128 * 1024;
+    const qint64 size = m_logFile.size();
+    if (size > kInitialTailBytes) {
+        m_logFile.seek(size - kInitialTailBytes);
+        m_logFile.readLine();
+    }
+    m_logOffset = m_logFile.pos();
+    appendNewLogData();
+}
+
+bool NetworkDiagnosticsDialog::reopenLogFile(bool keepExistingLines)
+{
+    const QString logPath = LogManager::instance().logFilePath();
+    if (m_logPathLabel) {
+        m_logPathLabel->setText(QString("Log: %1").arg(logPath));
+    }
+
+    m_logFile.close();
+    m_logFile.setFileName(logPath);
+    m_logOffset = 0;
+    m_logPartialLine.clear();
+    if (!keepExistingLines) {
+        m_logLines.clear();
+        if (m_logViewer) {
+            m_logViewer->clear();
+        }
+    }
+
+    if (!m_logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (m_lastReopenFailurePath != logPath) {
+            addLogLine(QString("[--:--:--.---] WRN default: Unable to open log file: %1").arg(logPath));
+            m_lastReopenFailurePath = logPath;
+        }
+        return false;
+    }
+
+    m_lastReopenFailurePath.clear();
+    return true;
+}
+
+void NetworkDiagnosticsDialog::appendNewLogData()
+{
+    if (!m_logViewer) {
+        return;
+    }
+
+    const QString currentLogPath = LogManager::instance().logFilePath();
+    if (!m_logFile.isOpen() || m_logFile.fileName() != currentLogPath) {
+        if (!reopenLogFile(true)) {
+            rebuildLogView();
+            return;
+        }
+    }
+
+    const QFileInfo pathInfo(currentLogPath);
+    if (!pathInfo.exists()) {
+        if (!reopenLogFile(true)) {
+            rebuildLogView();
+            return;
+        }
+    }
+
+    const qint64 size = pathInfo.exists() ? pathInfo.size() : m_logFile.size();
+    if (size < m_logOffset) {
+        if (!reopenLogFile(false)) {
+            rebuildLogView();
+            return;
+        }
+        m_logFile.seek(0);
+        m_logOffset = 0;
+        m_logPartialLine.clear();
+        addLogLine(QString("[--:--:--.---] INF default: Log file was reset; following from the beginning"));
+    } else if (m_logFile.pos() != m_logOffset) {
+        m_logFile.seek(m_logOffset);
+    }
+
+    const QByteArray bytes = m_logFile.readAll();
+    if (bytes.isEmpty()) {
+        return;
+    }
+    m_logOffset = m_logFile.pos();
+    appendLogText(QString::fromUtf8(bytes));
+}
+
+void NetworkDiagnosticsDialog::appendLogText(const QString& text)
+{
+    QString pending = QString::fromUtf8(m_logPartialLine) + text;
+    m_logPartialLine.clear();
+
+    int start = 0;
+    while (start < pending.size()) {
+        const int newline = pending.indexOf('\n', start);
+        if (newline < 0) {
+            m_logPartialLine = pending.mid(start).toUtf8();
+            break;
+        }
+        addLogLine(pending.mid(start, newline - start).trimmed());
+        start = newline + 1;
+    }
+}
+
+void NetworkDiagnosticsDialog::addLogLine(const QString& line)
+{
+    if (line.isEmpty()) {
+        return;
+    }
+
+    const LogLine logLine{line, logCategoryFromLine(line)};
+    m_logLines.push_back(logLine);
+    static constexpr qsizetype kMaxStoredLines = 5000;
+    while (m_logLines.size() > kMaxStoredLines) {
+        m_logLines.removeFirst();
+    }
+
+    if (!m_logFollowLive || !logLineVisible(logLine) || !m_logViewer) {
+        return;
+    }
+
+    m_logViewer->appendPlainText(logLine.text);
+    m_handlingLogScroll = true;
+    m_logViewer->verticalScrollBar()->setValue(m_logViewer->verticalScrollBar()->maximum());
+    m_handlingLogScroll = false;
+}
+
+void NetworkDiagnosticsDialog::rebuildLogView()
+{
+    if (!m_logViewer) {
+        return;
+    }
+
+    const bool wasFollowing = m_logFollowLive;
+    m_handlingLogScroll = true;
+    m_logViewer->clear();
+    QStringList visibleLines;
+    visibleLines.reserve(m_logLines.size());
+    for (const LogLine& line : m_logLines) {
+        if (logLineVisible(line)) {
+            visibleLines.push_back(line.text);
+        }
+    }
+    m_logViewer->setPlainText(visibleLines.join('\n'));
+    if (wasFollowing) {
+        m_logViewer->verticalScrollBar()->setValue(m_logViewer->verticalScrollBar()->maximum());
+    }
+    m_handlingLogScroll = false;
+}
+
+bool NetworkDiagnosticsDialog::logLineVisible(const LogLine& line) const
+{
+    return m_visibleLogCategories.contains(line.category);
+}
+
+QString NetworkDiagnosticsDialog::logCategoryFromLine(const QString& line) const
+{
+    static const QRegularExpression categoryRe(QStringLiteral("^\\[[^\\]]+\\]\\s+\\S+\\s+([^:]+):"));
+    const QRegularExpressionMatch match = categoryRe.match(line);
+    if (!match.hasMatch()) {
+        return QStringLiteral("default");
+    }
+
+    QString category = match.captured(1).trimmed();
+    if (category.isEmpty()) {
+        return QStringLiteral("default");
+    }
+    return category;
+}
+
+void NetworkDiagnosticsDialog::setLogFollowLive(bool on)
+{
+    m_logFollowLive = on;
+    if (m_logLiveToggle) {
+        const QSignalBlocker blocker(m_logLiveToggle);
+        m_logLiveToggle->setChecked(on);
+        m_logLiveToggle->setText(on ? "Live" : "Paused");
+        m_logLiveToggle->setToolTip(on
+            ? "Live follows the newest log output. Turn it off to inspect older lines."
+            : "Paused. Turn Live back on to jump to the newest log output.");
+    }
+    if (on && m_logViewer) {
+        rebuildLogView();
+        m_handlingLogScroll = true;
+        m_logViewer->verticalScrollBar()->setValue(m_logViewer->verticalScrollBar()->maximum());
+        m_handlingLogScroll = false;
+    }
+}
+
+void NetworkDiagnosticsDialog::setAllLogCategoriesVisible(bool visible)
+{
+    m_visibleLogCategories.clear();
+    for (QCheckBox* checkbox : m_logCategoryCheckboxes) {
+        if (!checkbox) {
+            continue;
+        }
+        const QString category = checkbox->property("logCategory").toString();
+        if (visible && !category.isEmpty()) {
+            m_visibleLogCategories.insert(category);
+        }
+        const QSignalBlocker blocker(checkbox);
+        checkbox->setChecked(visible);
+    }
+    rebuildLogView();
 }
 
 static QString formatDrop(const PanadapterStream::CategoryStats& cs)

@@ -35,8 +35,8 @@ LogManager::LogManager()
     // Register categories with human-readable labels and descriptions
     m_categories = {
         {"aether.discovery",  "Discovery",    "UDP radio discovery broadcasts"},
-        {"aether.connection", "Commands",     "TCP commands sent (TX) and responses received (RX)"},
-        {"aether.protocol",   "Status",       "Parsed status messages (slice, pan, transmit, meter)"},
+        {"aether.connection", "Connection / Commands", "Raw TCP command channel lines: TX commands, RX responses, and socket state"},
+        {"aether.protocol",   "Protocol / Status",     "Parsed SmartSDR protocol handling and model status updates"},
         {"aether.audio",      "Audio",        "RX/TX audio, device negotiation, volume"},
         {"aether.vita49",     "VITA-49",      "UDP packet routing: FFT, waterfall, meters, DAX"},
         {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
@@ -50,9 +50,11 @@ LogManager::LogManager()
         {"aether.tuner",      "Tuner/AGM",    "TGXL tuner, Antenna Genius state"},
         {"aether.gui",        "GUI",          "Window, applets, dialogs"},
         {"aether.dxcluster",  "DX Cluster",   "DX cluster telnet connection and spot parsing"},
+        {"aether.mqtt",       "MQTT",         "MQTT telemetry client connection and messages"},
         {"aether.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
         {"aether.devices",    "Ext Devices",  "Serial port, FlexControl, MIDI, HID encoder"},
         {"aether.perf",       "Performance",  "Render timing and CPU profiling data"},
+        {"aether.propforecast", "Propagation",  "Solar and propagation forecast updates"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
@@ -109,8 +111,16 @@ void LogManager::applyFilterRules()
 
 QString LogManager::logFilePath() const
 {
+    if (!m_activeLogFilePath.isEmpty()) {
+        return m_activeLogFilePath;
+    }
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
            + "/AetherSDR/aethersdr.log";
+}
+
+void LogManager::setActiveLogFilePath(const QString& path)
+{
+    m_activeLogFilePath = path;
 }
 
 qint64 LogManager::logFileSize() const
