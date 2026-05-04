@@ -4,10 +4,16 @@
 
 #include <QComboBox>
 #include <QDialog>
+#include <QFile>
 #include <QLabel>
 #include <QObject>
+#include <QSet>
 #include <QTimer>
 #include <QVector>
+
+class QCheckBox;
+class QPlainTextEdit;
+class QPushButton;
 
 namespace AetherSDR {
 
@@ -78,8 +84,24 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    struct LogLine {
+        QString text;
+        QString category;
+    };
+
     void refresh();
     void updateCharts();
+    QWidget* buildLogsTab();
+    void initializeLogTail();
+    bool reopenLogFile(bool keepExistingLines);
+    void appendNewLogData();
+    void appendLogText(const QString& text);
+    void addLogLine(const QString& line);
+    void rebuildLogView();
+    bool logLineVisible(const LogLine& line) const;
+    QString logCategoryFromLine(const QString& line) const;
+    void setLogFollowLive(bool on);
+    void setAllLogCategoriesVisible(bool visible);
     int selectedRangeSeconds() const;
     Qt::Edges edgesAt(const QPoint& pos) const;
     void updateResizeCursor(const QPoint& pos);
@@ -90,6 +112,7 @@ private:
     AudioEngine* m_audio;
     NetworkDiagnosticsHistory* m_history{nullptr};
     QTimer      m_refreshTimer;
+    QTimer      m_logRefreshTimer;
     QComboBox*  m_rangeCombo{nullptr};
 
     QLabel* m_statusLabel;
@@ -137,6 +160,19 @@ private:
     TimeSeriesGraphWidget* m_ratesGraph{nullptr};
     TimeSeriesGraphWidget* m_lossGraph{nullptr};
     TimeSeriesGraphWidget* m_audioGraph{nullptr};
+
+    QPlainTextEdit* m_logViewer{nullptr};
+    QLabel* m_logPathLabel{nullptr};
+    QPushButton* m_logLiveToggle{nullptr};
+    QVector<QCheckBox*> m_logCategoryCheckboxes;
+    QVector<LogLine> m_logLines;
+    QSet<QString> m_visibleLogCategories;
+    QFile m_logFile;
+    QByteArray m_logPartialLine;
+    QString m_lastReopenFailurePath;
+    qint64 m_logOffset{0};
+    bool m_logFollowLive{true};
+    bool m_handlingLogScroll{false};
 };
 
 } // namespace AetherSDR

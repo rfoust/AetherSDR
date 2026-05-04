@@ -59,6 +59,7 @@ public:
 
     // Log file management
     QString logFilePath() const;
+    void setActiveLogFilePath(const QString& path);
     qint64 logFileSize() const;
     void clearLog();
 
@@ -74,6 +75,7 @@ private:
     void applyFilterRules();
 
     QList<Category> m_categories;
+    QString m_activeLogFilePath;
 };
 
 } // namespace AetherSDR

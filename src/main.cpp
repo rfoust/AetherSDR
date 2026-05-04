@@ -112,14 +112,15 @@ static QString redactPii(const QString& msg)
 
 static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
 {
-    Q_UNUSED(ctx);
-
     static const char* labels[] = {"DBG", "WRN", "CRT", "FTL", "INF"};
     const char* label = (type <= QtInfoMsg) ? labels[type] : "???";
+    const QString category = (ctx.category && *ctx.category)
+        ? QString::fromUtf8(ctx.category)
+        : QStringLiteral("default");
 
     const QString safeMsg = redactPii(msg);
-    const QString line = QString("[%1] %2: %3\n")
-        .arg(QDateTime::currentDateTime().toString("HH:mm:ss.zzz"), label, safeMsg);
+    const QString line = QString("[%1] %2 %3: %4\n")
+        .arg(QDateTime::currentDateTime().toString("HH:mm:ss.zzz"), label, category, safeMsg);
     const QByteArray lineBytes = line.toUtf8();
 
     // File write is the only thing that needs the mutex — QFile is not
@@ -256,6 +257,7 @@ int main(int argc, char* argv[])
     if (s_logFile->open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
         // Restrict log file to owner-only (may contain session identifiers)
         s_logFile->setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        AetherSDR::LogManager::instance().setActiveLogFilePath(logPath);
         qInstallMessageHandler(messageHandler);
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)
