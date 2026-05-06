@@ -1966,7 +1966,9 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool tx) {
         // Keep TX audio source strictly aligned with the local MOX edge for all
         // modes (SSB + DAX). Waiting for interlock introduces audible lag.
-        m_audio->setTransmitting(tx);
+        if (m_audio) {
+            m_audio->setTransmitting(tx);
+        }
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         if (m_daxBridge)
             m_daxBridge->setTransmitting(tx);
@@ -1974,7 +1976,9 @@ MainWindow::MainWindow(QWidget* parent)
 
 #ifdef HAVE_RADE
         if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
-            m_audio->setRadeMode(tx);
+            if (m_audio) {
+                m_audio->setRadeMode(tx);
+            }
             if (!tx) {
                 m_radeEngine->resetTx();
             }
@@ -1991,7 +1995,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::txAudioGateChanged,
             this, [this](bool tx) {
         if (!tx) {
-            m_audio->setTransmitting(false);
+            if (m_audio) {
+                m_audio->setTransmitting(false);
+            }
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
             if (m_daxBridge)
                 m_daxBridge->setTransmitting(false);
@@ -2005,7 +2011,9 @@ MainWindow::MainWindow(QWidget* parent)
     // Multi-Flex TX from other clients.
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool tx) {
-        m_audio->setRadioTransmitting(tx);
+        if (m_audio) {
+            m_audio->setRadioTransmitting(tx);
+        }
         // Waterfall freeze/unfreeze: gate on the actual interlock TRANSMITTING
         // state, not the MOX edge. moxChanged fires the instant the user releases
         // PTT, but the radio keeps streaming TX-contaminated tiles/FFT for the
