@@ -695,7 +695,7 @@ void AetherialAudioStrip::setFramelessMode(bool on)
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
 
-    Qt::WindowFlags flags = windowFlags();
+    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Window;
     flags.setFlag(Qt::FramelessWindowHint, on);
     setWindowFlags(flags);
     setGeometry(geom);

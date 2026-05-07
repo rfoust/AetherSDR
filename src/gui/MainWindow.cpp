@@ -4109,7 +4109,7 @@ void setEditorFramelessMode(QWidget* editor, bool on)
 
     const QRect geom = editor->geometry();
     const bool wasVisible = editor->isVisible();
-    Qt::WindowFlags flags = editor->windowFlags();
+    Qt::WindowFlags flags = (editor->windowFlags() & ~Qt::WindowType_Mask) | Qt::Window;
     flags.setFlag(Qt::FramelessWindowHint, on);
     editor->setWindowFlags(flags);
     editor->setGeometry(geom);
@@ -4130,7 +4130,7 @@ void setDialogFramelessMode(QDialog* dialog, bool on)
 
     const QRect geom = dialog->geometry();
     const bool wasVisible = dialog->isVisible();
-    Qt::WindowFlags flags = dialog->windowFlags();
+    Qt::WindowFlags flags = (dialog->windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
     flags.setFlag(Qt::FramelessWindowHint, on);
     dialog->setWindowFlags(flags);
     dialog->setGeometry(geom);
