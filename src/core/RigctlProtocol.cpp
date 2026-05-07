@@ -12,19 +12,24 @@ namespace AetherSDR {
 
 namespace {
 
+constexpr quint64 kRigLevelRfPower           = (1ULL << 13);
 constexpr quint64 kRigLevelKeyspd            = (1ULL << 14);
 constexpr quint64 kRigLevelSwr               = (1ULL << 28);
 constexpr quint64 kRigLevelRfPowerMeter      = (1ULL << 32);
 constexpr quint64 kRigLevelRfPowerMeterWatts = (1ULL << 39);
 constexpr qint64  kTxMeterFreshMs            = 1500;
-constexpr quint64 kRigGetLevelMask = kRigLevelKeyspd
+constexpr quint64 kRigGetLevelMask = kRigLevelRfPower
+                                   | kRigLevelKeyspd
                                    | kRigLevelSwr
                                    | kRigLevelRfPowerMeter
                                    | kRigLevelRfPowerMeterWatts;
+constexpr quint64 kRigSetLevelMask = kRigLevelRfPower
+                                   | kRigLevelKeyspd;
 
 QStringList rigGetLevelTokens()
 {
     return {
+        QStringLiteral("RFPOWER"),
         QStringLiteral("KEYSPD"),
         QStringLiteral("SWR"),
         QStringLiteral("RFPOWER_METER"),
@@ -34,7 +39,10 @@ QStringList rigGetLevelTokens()
 
 QStringList rigSetLevelTokens()
 {
-    return { QStringLiteral("KEYSPD") };
+    return {
+        QStringLiteral("RFPOWER"),
+        QStringLiteral("KEYSPD"),
+    };
 }
 
 QString formatRigLevelValue(double value)
@@ -122,6 +130,11 @@ QString RigctlProtocol::rprt(int code) const
 
 QString RigctlProtocol::handleLine(const QString& line)
 {
+    if (m_pendingMorseLine) {
+        m_pendingMorseLine = false;
+        return cmdSendMorse(line.trimmed());
+    }
+
     QString trimmed = line.trimmed();
     if (trimmed.isEmpty())
         return {};
@@ -132,6 +145,28 @@ QString RigctlProtocol::handleLine(const QString& line)
             m_extended = true;
             trimmed = trimmed.mid(1);
         }
+    }
+
+    // Pipe separator mode: '|' splits commands and implies extended responses
+    // joined by '|' instead of newlines (standard rigctld wire protocol).
+    const bool pipeMode = trimmed.contains('|');
+    if (pipeMode) {
+        const bool savedExtended = m_extended;
+        m_extended = true;
+
+        QStringList cmds = trimmed.split('|', Qt::SkipEmptyParts);
+        QStringList results;
+        for (const auto& cmd : cmds) {
+            QString r = processCommand(cmd.trimmed());
+            // Each response ends with '\n'; strip trailing newline before joining
+            if (r.endsWith('\n'))
+                r.chop(1);
+            // Replace interior newlines with '|' for pipe-mode formatting
+            r.replace('\n', '|');
+            results << r;
+        }
+        m_extended = savedExtended;
+        return results.join('|') + QChar('\n');
     }
 
     // Split on ';' for batch commands
@@ -275,19 +310,39 @@ QString RigctlProtocol::cmdSetMode(const QString& args)
         slice->setMode(sdrMode);
     }, Qt::QueuedConnection);
 
-    // Set passband if provided and > 0
+    // Set passband if provided and > 0. Hamlib's passband is the filter
+    // *width* in Hz; SmartSDR's `filt` command takes absolute lo/hi audio
+    // edges, and the right placement depends on the mode. Mirrors the
+    // canonical mapping in VfoWidget::applyFilterWidthForMode (#2259-era).
     if (parts.size() >= 2) {
         bool ok;
         int passband = parts[1].toInt(&ok);
         if (ok && passband > 0) {
             QMetaObject::invokeMethod(slice, [slice, passband]() {
-                // Center the filter around 0 for SSB modes
-                QString m = slice->mode();
-                if (m == "LSB" || m == "DIGL" || m == "CWL") {
-                    slice->setFilterWidth(-passband, -95);
+                const QString m = slice->mode();
+                int lo = 95;
+                int hi = passband;
+                if (m == "CW" || m == "CWL"
+                    || m == "AM" || m == "SAM" || m == "DSB"
+                    || m == "FM" || m == "NFM" || m == "DFM") {
+                    // Symmetric around 0 — CW BFO offset and AM/FM carrier
+                    // are at audio DC.
+                    lo = -passband / 2;
+                    hi =  passband / 2;
+                } else if (m == "LSB" || m == "DIGL") {
+                    // DIGL audio sits on the lower sideband — same edge
+                    // geometry as LSB. (Offset-aware placement for narrow
+                    // widths is handled in the GUI path; the rigctld path
+                    // uses the wide-fallback geometry from
+                    // VfoWidget::applyFilterPreset.)
+                    lo = -passband;
+                    hi = -95;
                 } else {
-                    slice->setFilterWidth(95, passband);
+                    // USB, DIGU, RTTY, FDV, etc. — high-side from 95 Hz
+                    lo = 95;
+                    hi = passband;
                 }
+                slice->setFilterWidth(lo, hi);
             }, Qt::QueuedConnection);
         }
     }
@@ -474,6 +529,13 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
     if (level == "KEYSPD")
         return makeResponse(QString::number(txModel.cwSpeed()));
 
+    if (level == "RFPOWER") {
+        // Hamlib RIG_LEVEL_RFPOWER is normalized 0.0–1.0; the radio reports
+        // 0–100 (percent of max_power_level), so divide by 100.
+        const double ratio = qBound(0.0, txModel.rfPower() / 100.0, 1.0);
+        return makeResponse(formatRigLevelValue(ratio));
+    }
+
     if (level == "SWR") {
         // WSJT-X polls immediately after PTT and treats 0 as "no valid reading".
         // Suppress cached last-TX values until a fresh TX meter sample arrives.
@@ -512,6 +574,21 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
     }
     if (level == "KEYSPD")
         return cmdSetKeySpeed(parts.mid(1).join(' '));
+
+    if (level == "RFPOWER") {
+        if (parts.size() < 2) return rprt(-1);
+        bool ok = false;
+        double ratio = parts[1].toDouble(&ok);
+        if (!ok) return rprt(-1);
+        // Hamlib delivers RFPOWER as 0.0–1.0; convert to the radio's 0–100
+        // scale and let TransmitModel::setRfPower clamp.
+        const int percent = qRound(qBound(0.0, ratio, 1.0) * 100.0);
+        if (!m_model) return rprt(-8);
+        QMetaObject::invokeMethod(m_model, [this, percent]() {
+            m_model->transmitModel().setRfPower(percent);
+        }, Qt::QueuedConnection);
+        return rprt(0);
+    }
     return rprt(-11);  // RIG_ENAVAIL
 }
 
@@ -559,11 +636,12 @@ QString RigctlProtocol::cmdDumpState()
     dump += "\n";
     dump += "\n";
     // has get/set func/level/parm
-    // Levels: KEYSPD, SWR, RFPOWER_METER, RFPOWER_METER_WATTS
+    // get levels: RFPOWER, KEYSPD, SWR, RFPOWER_METER, RFPOWER_METER_WATTS
+    // set levels: RFPOWER, KEYSPD
     dump += "0x0\n";
     dump += "0x0\n";
     dump += QStringLiteral("0x%1\n").arg(kRigGetLevelMask, 0, 16);
-    dump += QStringLiteral("0x%1\n").arg(kRigLevelKeyspd, 0, 16);
+    dump += QStringLiteral("0x%1\n").arg(kRigSetLevelMask, 0, 16);
     dump += "0x0\n";
     dump += "0x0\n";
     // Protocol v1 additional fields (required by netrigctl_open)
@@ -588,7 +666,15 @@ QString RigctlProtocol::cmdDumpState()
 
 QString RigctlProtocol::cmdSendMorse(const QString& text)
 {
-    if (!m_model || text.isEmpty()) return rprt(-1);
+    if (!m_model) return rprt(-1);
+    if (text.isEmpty()) {
+        // Hamlib `b` accepts the morse text on the next line when none is
+        // supplied inline. Arm the pending flag and return no response; the
+        // next handleLine() call will deliver the text. Required by Not1MM
+        // contest CW and any other client that uses the two-line form.
+        m_pendingMorseLine = true;
+        return {};
+    }
     QString cmd = QString("cwx send \"%1\"").arg(text);
     QMetaObject::invokeMethod(m_model, [this, cmd]() {
         m_model->sendCmdPublic(cmd, nullptr);

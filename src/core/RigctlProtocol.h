@@ -15,7 +15,8 @@ class RigctlProtocol {
 public:
     explicit RigctlProtocol(RadioModel* model);
 
-    // Process one command line (may contain ';'-separated batch commands).
+    // Process one command line (may contain ';' or '|'-separated batch commands).
+    // '|' separator enables extended responses joined by '|' (rigctld pipe mode).
     // Returns the complete response string to send back to the client.
     QString handleLine(const QString& line);
 
@@ -68,6 +69,10 @@ private:
     RadioModel* m_model;
     int  m_sliceIndex{0};
     bool m_extended{false};
+    // Set when a bare `b` / `\send_morse` arrives without inline text.
+    // The next line is consumed verbatim as the morse text. Hamlib spec
+    // allows this two-line form and Not1MM contest CW relies on it.
+    bool m_pendingMorseLine{false};
 };
 
 } // namespace AetherSDR
