@@ -661,9 +661,8 @@ void ConnectionPanel::setFramelessMode(bool on)
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
 
-    Qt::WindowFlags flags = Qt::Dialog;
-    if (on)
-        flags |= Qt::FramelessWindowHint;
+    Qt::WindowFlags flags = windowFlags();
+    flags.setFlag(Qt::FramelessWindowHint, on);
     setWindowFlags(flags);
     setGeometry(geom);
     if (m_titleBar)
