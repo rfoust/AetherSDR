@@ -2,6 +2,7 @@
 
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
+#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientFinalLimiter.h"
 #include "core/ClientQuindarTone.h"
@@ -821,10 +822,16 @@ void StripFinalOutputPanel::showQuindarEditor()
 
     auto* dlg = new QDialog(this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
-    // Frameless chrome with the same draggable title bar the rest of
-    // the strip's editors use.  Fixed-size dialog — no resize grip
-    // needed since all controls fit at a single layout.
-    dlg->setWindowFlags(dlg->windowFlags() | Qt::FramelessWindowHint);
+    dlg->setObjectName("quindarToneEditor");
+    const bool frameless = AppSettings::instance()
+                               .value("FramelessWindow", "True")
+                               .toString()
+                           == "True";
+    // Custom chrome uses the same draggable title bar as the rest of
+    // the strip's editors when frameless windows are enabled.
+    if (frameless) {
+        dlg->setWindowFlags(dlg->windowFlags() | Qt::FramelessWindowHint);
+    }
     dlg->setWindowTitle(tr("Quindar Tones"));
     dlg->setStyleSheet(
         "QDialog { background: #08121d; }"
@@ -857,7 +864,9 @@ void StripFinalOutputPanel::showQuindarEditor()
     // ContainerTitleBar has float/close signals tied to
     // ContainerWidget lifecycle that don't apply to a modal dialog.
     auto* titleBar = new QWidget(dlg);
+    titleBar->setObjectName("editorFramelessTitleBar");
     titleBar->setFixedHeight(18);
+    titleBar->setVisible(frameless);
     titleBar->setAttribute(Qt::WA_StyledBackground, true);
     titleBar->setStyleSheet(
         "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"

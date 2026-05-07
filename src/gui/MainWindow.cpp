@@ -4124,6 +4124,29 @@ void setEditorFramelessMode(QWidget* editor, bool on)
     }
 }
 
+void setDialogFramelessMode(QDialog* dialog, bool on)
+{
+    if (!dialog) {
+        return;
+    }
+
+    const QRect geom = dialog->geometry();
+    const bool wasVisible = dialog->isVisible();
+    Qt::WindowFlags flags = Qt::Dialog;
+    if (on) {
+        flags |= Qt::FramelessWindowHint;
+    }
+    dialog->setWindowFlags(flags);
+    dialog->setGeometry(geom);
+
+    if (auto* titleBar = dialog->findChild<QWidget*>("editorFramelessTitleBar")) {
+        titleBar->setVisible(on);
+    }
+    if (wasVisible) {
+        dialog->show();
+    }
+}
+
 bool framelessWindowEnabled()
 {
     return AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
@@ -10222,6 +10245,8 @@ void MainWindow::setFramelessWindow(bool on)
         m_connPanel->setFramelessMode(on);
     if (auto* dlg = qobject_cast<NetworkDiagnosticsDialog*>(m_networkDiagnosticsDialog))
         dlg->setFramelessMode(on);
+    if (auto* dlg = qobject_cast<PropDashboardDialog*>(m_propDashboardDialog))
+        dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<RadioSetupDialog*>(m_radioSetupDialog))
         dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<AetherDspDialog*>(m_dspDialog))
@@ -10233,6 +10258,11 @@ void MainWindow::setFramelessWindow(bool on)
     setEditorFramelessMode(m_clientGateEditor, on);
     setEditorFramelessMode(m_clientTubeEditor, on);
     setEditorFramelessMode(m_clientPuduEditor, on);
+    for (auto* widget : QApplication::topLevelWidgets()) {
+        if (widget && widget->objectName() == "quindarToneEditor") {
+            setDialogFramelessMode(qobject_cast<QDialog*>(widget), on);
+        }
+    }
 }
 
 void MainWindow::toggleAetherialStrip()
