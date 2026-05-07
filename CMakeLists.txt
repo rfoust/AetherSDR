@@ -536,6 +536,7 @@ set(GUI_SOURCES
     src/gui/DxClusterDialog.cpp
     src/gui/CwxPanel.cpp
     src/gui/BandStackPanel.cpp
+    src/gui/FramelessWindowTitleBar.cpp
     src/gui/FramelessResizer.cpp
     src/gui/PanFloatingWindow.cpp
     src/gui/DvkPanel.cpp

@@ -20,6 +20,8 @@ class AetherDspDialog : public QDialog {
 public:
     explicit AetherDspDialog(AudioEngine* audio, QWidget* parent = nullptr);
 
+    void setFramelessMode(bool on);
+
     // Sync UI from current AudioEngine state.
     void syncFromEngine();
 

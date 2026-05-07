@@ -15,6 +15,8 @@
 #include <QStackedWidget>
 #include <QToolButton>
 
+class QVBoxLayout;
+
 namespace AetherSDR {
 
 // Novice-first dialog for local, SmartLink, and manual/VPN radio connections.
@@ -24,6 +26,7 @@ class ConnectionPanel : public QWidget {
 public:
     explicit ConnectionPanel(QWidget* parent = nullptr);
 
+    void setFramelessMode(bool on);
     void setConnected(bool connected);
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip);
@@ -86,6 +89,9 @@ private:
     void setManualMessage(const QString& text, bool error = false);
     QString formatLocalRadioLabel(const RadioInfo& radio) const;
     QString formatWanRadioLabel(const WanRadioInfo& radio) const;
+
+    QWidget*     m_titleBar{nullptr};
+    QVBoxLayout* m_rootLayout{nullptr};
 
     QButtonGroup* m_modeButtons{nullptr};
     QStackedWidget* m_modeStack{nullptr};

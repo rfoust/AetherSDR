@@ -1,4 +1,5 @@
 #include "NetworkDiagnosticsDialog.h"
+#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
@@ -586,7 +587,6 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     : QDialog(parent), m_model(model), m_audio(audio), m_history(history)
 {
     setWindowTitle("Network Diagnostics");
-    setWindowFlag(Qt::FramelessWindowHint, true);
     setMinimumSize(920, 680);
     resize(980, 760);
     // Track mouse without buttons pressed so the resize cursor updates
@@ -693,6 +693,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     auto* body = new QVBoxLayout(outerContent);
     body->setContentsMargins(10, 8, 10, 10);
     body->setSpacing(8);
+    m_bodyLayout = body;
     root->addWidget(outerContent, 1);
 
     // Timeframe selector lives in the top-right corner of the QTabWidget's
@@ -1031,6 +1032,31 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     m_logRefreshTimer.start(500);
     initializeLogTail();
     refresh();
+
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+}
+
+void NetworkDiagnosticsDialog::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = Qt::Dialog;
+    if (on) {
+        flags |= Qt::FramelessWindowHint;
+    }
+    setWindowFlags(flags);
+    setGeometry(geom);
+    if (m_titleBar) {
+        m_titleBar->setVisible(on);
+    }
+    if (m_bodyLayout) {
+        m_bodyLayout->setContentsMargins(10, on ? 8 : 10, 10, 10);
+    }
+    if (wasVisible) {
+        show();
+    }
 }
 
 QWidget* NetworkDiagnosticsDialog::buildLogsTab()
@@ -1807,6 +1833,9 @@ void NetworkDiagnosticsDialog::updateCharts()
 
 Qt::Edges NetworkDiagnosticsDialog::edgesAt(const QPoint& pos) const
 {
+    if (!(windowFlags() & Qt::FramelessWindowHint)) {
+        return {};
+    }
     if (isMaximized() || isFullScreen()) {
         return {};
     }

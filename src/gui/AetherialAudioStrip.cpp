@@ -62,7 +62,7 @@ constexpr int kResizeMargin = 6;
 }
 
 AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
-    : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
+    : QWidget(parent, Qt::Window)
     , m_audio(engine)
     , m_presets(new ChannelStripPresets(engine, this))
 {
@@ -188,6 +188,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     auto* body = new QVBoxLayout(content);
     body->setContentsMargins(8, 0, 8, 8);
     body->setSpacing(8);
+    m_bodyLayout = body;
     root->addWidget(content, 1);
 
     // Top: horizontal CHAIN strip + record/play buttons inline at the
@@ -671,6 +672,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     }
 
     restoreGeometryFromSettings();
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
 
     // Restore last selected mode (#2425).  Default = TX so users on
     // upgrade keep the existing behaviour.  Toggling the button fires
@@ -686,6 +689,28 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
 }
 
 AetherialAudioStrip::~AetherialAudioStrip() = default;
+
+void AetherialAudioStrip::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = Qt::Window;
+    if (on) {
+        flags |= Qt::FramelessWindowHint;
+    }
+    setWindowFlags(flags);
+    setGeometry(geom);
+    if (m_titleBar) {
+        m_titleBar->setVisible(on);
+    }
+    if (m_bodyLayout) {
+        m_bodyLayout->setContentsMargins(8, on ? 0 : 8, 8, 8);
+    }
+    if (wasVisible) {
+        show();
+    }
+}
 
 void AetherialAudioStrip::setTxFilterCutoffs(int lowHz, int highHz)
 {
@@ -822,6 +847,8 @@ void AetherialAudioStrip::hideEvent(QHideEvent* ev)
 
 Qt::Edges AetherialAudioStrip::edgesAt(const QPoint& pos) const
 {
+    if (!(windowFlags() & Qt::FramelessWindowHint))
+        return {};
     if (isMaximized() || isFullScreen())
         return {};
 

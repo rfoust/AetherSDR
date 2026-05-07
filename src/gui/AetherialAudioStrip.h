@@ -9,6 +9,7 @@ class QPushButton;
 class QComboBox;
 class QLabel;
 class QStackedWidget;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -46,6 +47,8 @@ class AetherialAudioStrip : public QWidget {
 public:
     explicit AetherialAudioStrip(AudioEngine* engine, QWidget* parent = nullptr);
     ~AetherialAudioStrip() override;
+
+    void setFramelessMode(bool on);
 
     // Forward radio TX filter cutoffs to the embedded EQ canvas so the
     // dashed yellow filter-edge guide lines render here too.  MainWindow
@@ -170,6 +173,7 @@ private:
     AudioEngine*         m_audio{nullptr};
     ChannelStripPresets* m_presets{nullptr};
     QWidget*             m_titleBar{nullptr};   // custom inline ContainerTitleBar-styled bar
+    QVBoxLayout*         m_bodyLayout{nullptr};
     QLabel*              m_titleLbl{nullptr};   // title text — toggles "— TX" / "— RX" suffix
     StripChainWidget*    m_chain{nullptr};
     StripRxChainWidget*  m_chainRx{nullptr};

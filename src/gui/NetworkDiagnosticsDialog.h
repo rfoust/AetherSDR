@@ -14,6 +14,7 @@
 class QCheckBox;
 class QPlainTextEdit;
 class QPushButton;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -73,6 +74,7 @@ public:
                                       AudioEngine* audio,
                                       NetworkDiagnosticsHistory* history,
                                       QWidget* parent = nullptr);
+    void setFramelessMode(bool on);
 
 protected:
     // Frameless 8-axis resize: 4 edges + 4 corners.  Hovering the bare
@@ -107,6 +109,7 @@ private:
     void updateResizeCursor(const QPoint& pos);
 
     QWidget* m_titleBar{nullptr};
+    QVBoxLayout* m_bodyLayout{nullptr};
 
     RadioModel* m_model;
     AudioEngine* m_audio;

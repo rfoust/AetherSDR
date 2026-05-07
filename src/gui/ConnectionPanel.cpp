@@ -1,6 +1,8 @@
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
 #include "core/NetworkPathResolver.h"
+#include "FramelessResizer.h"
+#include "FramelessWindowTitleBar.h"
 
 #include <QAbstractItemView>
 #include <QFormLayout>
@@ -220,9 +222,20 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "QCheckBox::indicator:checked { border: 2px solid #8cc8ff; background: #2f71b6; }"
         "QCheckBox::indicator:disabled { border-color: #405262; background: #10161d; }";
 
-    auto* root = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("Connect to Radio"), this);
+    m_titleBar = titleBar;
+    outer->addWidget(titleBar);
+
+    auto* content = new QWidget(this);
+    auto* root = new QVBoxLayout(content);
     root->setContentsMargins(12, 12, 12, 12);
     root->setSpacing(10);
+    m_rootLayout = root;
+    outer->addWidget(content, 1);
 
     auto* titleLabel = new QLabel("Connect to a Radio", this);
     titleLabel->setStyleSheet(
@@ -638,6 +651,27 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     updateLocalPageState();
     updateSmartLinkUi();
     updateManualAdvancedVisibility();
+    FramelessResizer::install(this);
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+}
+
+void ConnectionPanel::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = Qt::Dialog;
+    if (on)
+        flags |= Qt::FramelessWindowHint;
+    setWindowFlags(flags);
+    setGeometry(geom);
+    if (m_titleBar)
+        m_titleBar->setVisible(on);
+    if (m_rootLayout)
+        m_rootLayout->setContentsMargins(12, on ? 10 : 12, 12, 12);
+    if (wasVisible)
+        show();
 }
 
 void ConnectionPanel::setConnected(bool connected)

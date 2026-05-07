@@ -1,4 +1,6 @@
 #include "RadioSetupDialog.h"
+#include "FramelessResizer.h"
+#include "FramelessWindowTitleBar.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -169,7 +171,19 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     setMinimumSize(820, 620);
     setStyleSheet("QDialog { background: #0f0f1a; }");
 
-    auto* layout = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("Radio Setup"), this);
+    m_titleBar = titleBar;
+    outer->addWidget(titleBar);
+
+    auto* bodyWidget = new QWidget(this);
+    auto* layout = new QVBoxLayout(bodyWidget);
+    layout->setContentsMargins(9, 9, 9, 9);
+    m_bodyLayout = layout;
+    outer->addWidget(bodyWidget, 1);
 
     auto* tabs = new QTabWidget;
     m_tabs = tabs;
@@ -231,6 +245,28 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         .value("RadioSetupDialogGeometry", "").toString();
     if (!geomB64.isEmpty())
         restoreGeometry(QByteArray::fromBase64(geomB64.toLatin1()));
+
+    FramelessResizer::install(this);
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+}
+
+void RadioSetupDialog::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = Qt::Dialog;
+    if (on)
+        flags |= Qt::FramelessWindowHint;
+    setWindowFlags(flags);
+    setGeometry(geom);
+    if (m_titleBar)
+        m_titleBar->setVisible(on);
+    if (m_bodyLayout)
+        m_bodyLayout->setContentsMargins(9, on ? 7 : 9, 9, 9);
+    if (wasVisible)
+        show();
 }
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)

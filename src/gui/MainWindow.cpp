@@ -98,6 +98,7 @@
 #include "AetherDspWidget.h"
 #include "ClientRxDspApplet.h"
 #include "DspParamPopup.h"
+#include "FramelessWindowTitleBar.h"
 
 #include <algorithm>
 #include <cmath>
@@ -150,7 +151,7 @@
 #include <QPlainTextEdit>
 #include <QSpinBox>
 #include <QComboBox>
-#include <QProgressDialog>
+#include <QProgressBar>
 #include <QThread>
 #include <QToolTip>
 #include "core/AppSettings.h"
@@ -4098,10 +4099,43 @@ MainWindow::~MainWindow()
 #endif
 }
 
+namespace {
+
+void setEditorFramelessMode(QWidget* editor, bool on)
+{
+    if (!editor) {
+        return;
+    }
+
+    const QRect geom = editor->geometry();
+    const bool wasVisible = editor->isVisible();
+    Qt::WindowFlags flags = Qt::Window;
+    if (on) {
+        flags |= Qt::FramelessWindowHint;
+    }
+    editor->setWindowFlags(flags);
+    editor->setGeometry(geom);
+
+    if (auto* titleBar = editor->findChild<QWidget*>("editorFramelessTitleBar")) {
+        titleBar->setVisible(on);
+    }
+    if (wasVisible) {
+        editor->show();
+    }
+}
+
+bool framelessWindowEnabled()
+{
+    return AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
+}
+
+}
+
 ClientEqEditor* MainWindow::ensureClientEqEditor()
 {
     if (!m_clientEqEditor) {
         m_clientEqEditor = new ClientEqEditor(m_audio, this);
+        setEditorFramelessMode(m_clientEqEditor, framelessWindowEnabled());
         connect(m_clientEqEditor, &ClientEqEditor::bypassToggled,
                 this, [this](ClientEqApplet::Path path, bool bypassed) {
             if (!m_appletPanel) return;
@@ -4205,6 +4239,7 @@ ClientGateEditor* MainWindow::ensureClientGateEditor()
 {
     if (!m_clientGateEditor) {
         m_clientGateEditor = new ClientGateEditor(m_audio, this);
+        setEditorFramelessMode(m_clientGateEditor, framelessWindowEnabled());
         connect(m_clientGateEditor, &ClientGateEditor::bypassToggled,
                 this, [this](ClientGateEditor::Side side, bool bypassed) {
             if (!m_appletPanel) return;
@@ -4228,6 +4263,7 @@ ClientCompEditor* MainWindow::ensureClientCompEditor()
 {
     if (!m_clientCompEditor) {
         m_clientCompEditor = new ClientCompEditor(m_audio, this);
+        setEditorFramelessMode(m_clientCompEditor, framelessWindowEnabled());
         connect(m_clientCompEditor, &ClientCompEditor::bypassToggled,
                 this, [this](ClientCompEditor::Side side, bool bypassed) {
             if (!m_appletPanel) return;
@@ -4251,6 +4287,7 @@ ClientTubeEditor* MainWindow::ensureClientTubeEditor()
 {
     if (!m_clientTubeEditor) {
         m_clientTubeEditor = new ClientTubeEditor(m_audio, this);
+        setEditorFramelessMode(m_clientTubeEditor, framelessWindowEnabled());
         connect(m_clientTubeEditor, &ClientTubeEditor::bypassToggled,
                 this, [this](ClientTubeEditor::Side side, bool bypassed) {
             if (!m_appletPanel) return;
@@ -4274,6 +4311,7 @@ ClientPuduEditor* MainWindow::ensureClientPuduEditor()
 {
     if (!m_clientPuduEditor) {
         m_clientPuduEditor = new ClientPuduEditor(m_audio, this);
+        setEditorFramelessMode(m_clientPuduEditor, framelessWindowEnabled());
         connect(m_clientPuduEditor, &ClientPuduEditor::bypassToggled,
                 this, [this](ClientPuduEditor::Side side, bool bypassed) {
             if (!m_appletPanel) return;
@@ -6642,10 +6680,11 @@ void MainWindow::buildUI()
 
     auto* splitter = m_splitter;
 
-    // Connection panel — modeless dialog with standard decorations (#560, #574)
+    // Connection panel — modeless dialog; follows View -> Frameless Window.
     m_connPanel = new ConnectionPanel(this);
-    m_connPanel->setWindowFlags(Qt::Dialog);
     m_connPanel->setWindowTitle("Connect to Radio");
+    m_connPanel->setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     m_connPanel->setMinimumSize(640, 580);
     m_connPanel->resize(760, 660);
     m_connPanel->hide();
@@ -9999,22 +10038,49 @@ void MainWindow::updateNr2Availability()
 void MainWindow::enableNr2WithWisdom()
 {
     if (AudioEngine::needsWisdomGeneration()) {
-        auto* dlg = new QProgressDialog(
-            "Optimizing FFT plans for NR2...\n\n"
-            "This window will automatically close when wisdom generation is complete.",
-            QString(), 0, 100, this);
+        const bool frameless =
+            AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
+
+        auto* dlg = new QDialog(this);
         dlg->setWindowTitle("AetherSDR — FFTW Wisdom");
+        if (frameless)
+            dlg->setWindowFlag(Qt::FramelessWindowHint, true);
         dlg->setWindowModality(Qt::ApplicationModal);
-        dlg->setMinimumDuration(0);
-        dlg->setAutoClose(false);
-        dlg->setAutoReset(false);
-        dlg->setCancelButton(nullptr);
         dlg->setMinimumWidth(500);
         dlg->setStyleSheet(
+            "QDialog { background: #050710; }"
+            "QLabel { color: #8aa8c0; background: transparent; }"
             "QProgressBar { text-align: center; font-size: 13px;"
             " font-weight: bold; color: #c8d8e8;"
-            " background: #1a2a3a; border: 1px solid #2e4e6e; border-radius: 3px; }"
+            " background: #0a0a14; border: 1px solid #203040; border-radius: 3px; }"
             "QProgressBar::chunk { background: #00b4d8; }");
+
+        auto* root = new QVBoxLayout(dlg);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->setSpacing(0);
+
+        auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("AetherSDR — FFTW Wisdom"), dlg);
+        titleBar->setVisible(frameless);
+        root->addWidget(titleBar);
+
+        auto* content = new QWidget(dlg);
+        auto* body = new QVBoxLayout(content);
+        body->setContentsMargins(10, frameless ? 8 : 10, 10, 10);
+        body->setSpacing(10);
+
+        auto* label = new QLabel(
+            "Optimizing FFT plans for NR2...\n\n"
+            "This window will automatically close when wisdom generation is complete.",
+            content);
+        label->setWordWrap(true);
+        body->addWidget(label);
+
+        auto* progress = new QProgressBar(content);
+        progress->setRange(0, 100);
+        progress->setValue(0);
+        body->addWidget(progress);
+        root->addWidget(content);
+
         dlg->show();
 
         auto* breathe = new QPropertyAnimation(dlg, "windowOpacity", dlg);
@@ -10024,27 +10090,27 @@ void MainWindow::enableNr2WithWisdom()
         breathe->setEndValue(1.0);
         breathe->setLoopCount(-1);
 
-        auto* thread = QThread::create([this, dlg, breathe]() {
-            AudioEngine::generateWisdom([dlg, breathe](int step, int total, const std::string& desc) {
+        auto* thread = QThread::create([dlg, breathe, label, progress]() {
+            AudioEngine::generateWisdom([dlg, breathe, label, progress](int step, int total, const std::string& desc) {
                 int pct = total > 0 ? (step * 100 / total) : 0;
                 QString d = QString::fromStdString(desc);
-                QMetaObject::invokeMethod(dlg, [dlg, breathe, pct, d]() {
+                QMetaObject::invokeMethod(dlg, [breathe, label, progress, pct, d]() {
                     if (!d.isEmpty()) {
-                        dlg->setLabelText(d + "\n\n"
+                        label->setText(d + "\n\n"
                             "This window will automatically close when wisdom generation is complete.");
-                        if (dlg->value() >= 90 && breathe->state() != QAbstractAnimation::Running)
+                        if (progress->value() >= 90 && breathe->state() != QAbstractAnimation::Running)
                             breathe->start();
                     } else {
-                        dlg->setValue(pct);
+                        progress->setValue(pct);
                     }
                 });
             });
         });
-        connect(thread, &QThread::finished, this, [this, dlg, breathe, thread]() {
+        connect(thread, &QThread::finished, this, [this, dlg, breathe, progress, label, thread]() {
             breathe->stop();
             dlg->setWindowOpacity(1.0);
-            dlg->setValue(100);
-            dlg->setLabelText("Wisdom generation complete!");
+            progress->setValue(100);
+            label->setText("Wisdom generation complete!");
             QTimer::singleShot(800, this, [this, dlg, thread]() {
                 dlg->close();
                 dlg->deleteLater();
@@ -10152,6 +10218,21 @@ void MainWindow::setFramelessWindow(bool on)
     if (m_panStack) m_panStack->setFramelessMode(on);
     if (m_appletPanel && m_appletPanel->containerManager())
         m_appletPanel->containerManager()->setFramelessMode(on);
+    if (m_connPanel)
+        m_connPanel->setFramelessMode(on);
+    if (auto* dlg = qobject_cast<NetworkDiagnosticsDialog*>(m_networkDiagnosticsDialog))
+        dlg->setFramelessMode(on);
+    if (auto* dlg = qobject_cast<RadioSetupDialog*>(m_radioSetupDialog))
+        dlg->setFramelessMode(on);
+    if (auto* dlg = qobject_cast<AetherDspDialog*>(m_dspDialog))
+        dlg->setFramelessMode(on);
+    if (m_aetherialStrip)
+        m_aetherialStrip->setFramelessMode(on);
+    setEditorFramelessMode(m_clientEqEditor, on);
+    setEditorFramelessMode(m_clientCompEditor, on);
+    setEditorFramelessMode(m_clientGateEditor, on);
+    setEditorFramelessMode(m_clientTubeEditor, on);
+    setEditorFramelessMode(m_clientPuduEditor, on);
 }
 
 void MainWindow::toggleAetherialStrip()

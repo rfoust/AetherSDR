@@ -10,6 +10,7 @@ namespace AetherSDR {
 EditorFramelessTitleBar::EditorFramelessTitleBar(QWidget* parent)
     : QWidget(parent)
 {
+    setObjectName(QStringLiteral("editorFramelessTitleBar"));
     setFixedHeight(20);
     setStyleSheet("background: #08121d;");
 

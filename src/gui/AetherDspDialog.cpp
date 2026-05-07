@@ -1,5 +1,6 @@
 #include "AetherDspDialog.h"
 #include "AetherDspWidget.h"
+#include "core/AppSettings.h"
 
 #include <QEvent>
 #include <QHBoxLayout>
@@ -19,7 +20,6 @@ AetherDspDialog::AetherDspDialog(AudioEngine* audio, QWidget* parent)
     : QDialog(parent)
 {
     setWindowTitle("AetherDSP Settings");
-    setWindowFlag(Qt::FramelessWindowHint, true);
     setMouseTracking(true);
     setStyleSheet("QDialog { background: #0f0f1a; color: #c8d8e8; }");
 
@@ -152,6 +152,25 @@ AetherDspDialog::AetherDspDialog(AudioEngine* audio, QWidget* parent)
             this,    &AetherDspDialog::nr4MaskingDepthChanged);
     connect(m_widget, &AetherDspWidget::nr4SuppressionChanged,
             this,    &AetherDspDialog::nr4SuppressionChanged);
+
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+}
+
+void AetherDspDialog::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = Qt::Dialog;
+    if (on)
+        flags |= Qt::FramelessWindowHint;
+    setWindowFlags(flags);
+    setGeometry(geom);
+    if (m_titleBar)
+        m_titleBar->setVisible(on);
+    if (wasVisible)
+        show();
 }
 
 void AetherDspDialog::syncFromEngine()
@@ -170,6 +189,7 @@ void AetherDspDialog::selectTab(const QString& name)
 
 Qt::Edges AetherDspDialog::edgesAt(const QPoint& pos) const
 {
+    if (!(windowFlags() & Qt::FramelessWindowHint)) return {};
     if (isMaximized() || isFullScreen()) return {};
     Qt::Edges edges;
     if (pos.x() <= kResizeMargin)              edges |= Qt::LeftEdge;

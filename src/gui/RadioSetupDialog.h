@@ -11,6 +11,7 @@ class QGroupBox;
 class QProgressBar;
 class QPushButton;
 class QComboBox;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -33,6 +34,7 @@ public:
                               PgxlConnection* pgxl = nullptr,
                               AntennaGeniusModel* ag = nullptr,
                               QWidget* parent = nullptr);
+    void setFramelessMode(bool on);
     void selectTab(const QString& tabName);
 
 signals:
@@ -67,6 +69,8 @@ private:
     TgxlConnection*    m_tgxl{nullptr};
     PgxlConnection*    m_pgxl{nullptr};
     AntennaGeniusModel* m_ag{nullptr};
+    QWidget*     m_titleBar{nullptr};
+    QVBoxLayout* m_bodyLayout{nullptr};
     QTabWidget*  m_tabs{nullptr};
 
     // Radio tab fields
