@@ -17,6 +17,7 @@
 #include <QToolButton>
 
 class QVBoxLayout;
+class QScreen;
 
 namespace AetherSDR {
 
@@ -28,6 +29,7 @@ public:
     explicit ConnectionPanel(QWidget* parent = nullptr);
 
     void setFramelessMode(bool on);
+    void fitToScreen(QScreen* preferredScreen = nullptr);
     void setConnected(bool connected);
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip);
@@ -41,6 +43,7 @@ public:
     void automationSetDialogVisible(bool visible) override
     {
         if (visible) {
+            fitToScreen();
             show();
             raise();
             activateWindow();

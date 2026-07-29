@@ -10,6 +10,7 @@
 
 #include <QAbstractItemView>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QInputDialog>
 #include <QMenu>
 #include <QFrame>
@@ -19,13 +20,17 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPainter>
+#include <QScrollArea>
+#include <QScreen>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QTcpSocket>
 #include <QUdpSocket>
 #include <QNetworkDatagram>
 #include <QDeadlineTimer>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QWindow>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -255,10 +260,18 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
 
     auto* content = new QWidget(this);
     auto* root = new QVBoxLayout(content);
-    root->setContentsMargins(12, 12, 12, 12);
+    root->setContentsMargins(12, 12, 12, 10);
     root->setSpacing(10);
     m_rootLayout = root;
-    outer->addWidget(content, 1);
+
+    auto* bodyScroll = new QScrollArea(this);
+    bodyScroll->setObjectName(QStringLiteral("connectionBodyScrollArea"));
+    bodyScroll->setAccessibleName(tr("Connection options"));
+    bodyScroll->setWidgetResizable(true);
+    bodyScroll->setFrameShape(QFrame::NoFrame);
+    bodyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    bodyScroll->setWidget(content);
+    outer->addWidget(bodyScroll, 1);
 
     auto* titleLabel = new QLabel("Connect to a Radio", this);
     AetherSDR::ThemeManager::instance().applyStyleSheet(titleLabel, "QLabel { color: {{color.text.primary}}; font-size: 18px; font-weight: bold; "
@@ -685,7 +698,12 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_disconnectBtn->setAccessibleName(tr("Disconnect from radio"));
     m_disconnectBtn->setVisible(false);
     footerRow->addWidget(m_disconnectBtn, 0, Qt::AlignRight);
-    root->addLayout(footerRow);
+
+    auto* footer = new QWidget(this);
+    footer->setObjectName(QStringLiteral("connectionFooter"));
+    footer->setLayout(footerRow);
+    footerRow->setContentsMargins(12, 0, 12, 12);
+    outer->addWidget(footer);
 
     loadRecentManualIps();
     applySavedSourceSelection(m_manualIpEdit->text().trimmed());
@@ -792,9 +810,47 @@ void ConnectionPanel::setFramelessMode(bool on)
     if (m_titleBar)
         m_titleBar->setVisible(on);
     if (m_rootLayout)
-        m_rootLayout->setContentsMargins(12, on ? 10 : 12, 12, 12);
+        m_rootLayout->setContentsMargins(12, on ? 10 : 12, 12, 10);
     if (wasVisible)
         show();
+}
+
+void ConnectionPanel::fitToScreen(QScreen* preferredScreen)
+{
+    QScreen* targetScreen = preferredScreen;
+    if (!targetScreen && windowHandle()) {
+        targetScreen = windowHandle()->screen();
+    }
+    if (!targetScreen && parentWidget()) {
+        targetScreen = parentWidget()->screen();
+    }
+    if (!targetScreen) {
+        targetScreen = QGuiApplication::primaryScreen();
+    }
+    if (!targetScreen) {
+        return;
+    }
+
+    const QRect available = targetScreen->availableGeometry();
+    QMargins frameMargins;
+    if (windowHandle()) {
+        frameMargins = windowHandle()->frameMargins();
+    }
+    if (frameMargins.isNull() && m_titleBar && m_titleBar->isHidden()) {
+        const int border =
+            style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, this);
+        const int titleHeight =
+            style()->pixelMetric(QStyle::PM_TitleBarHeight, nullptr, this);
+        frameMargins = QMargins(border, titleHeight, border, border);
+    }
+
+    const int maximumClientWidth =
+        qMax(1, available.width() - frameMargins.left() - frameMargins.right());
+    const int maximumClientHeight =
+        qMax(1, available.height() - frameMargins.top() - frameMargins.bottom());
+    setMinimumHeight(qMin(360, maximumClientHeight));
+    resize(qMin(width(), maximumClientWidth),
+           qMin(height(), maximumClientHeight));
 }
 
 void ConnectionPanel::setConnected(bool connected)

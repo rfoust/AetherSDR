@@ -163,6 +163,7 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
+#include <QStyle>
 #include <QTimer>
 #include <QDateTime>
 #include <QPropertyAnimation>
@@ -907,7 +908,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
             if (radioInfo.address.isNull()) {
                 setPanadapterConnectionAnimation(false);
                 m_connPanel->setStatusText("Select a radio to reconnect");
-                m_connPanel->show();
+                showConnectionDialog();
                 return;
             }
 
@@ -3571,16 +3572,34 @@ void MainWindow::showConnectionDialog()
     if (!screen)
         screen = QApplication::primaryScreen();
 
+    m_connPanel->fitToScreen(screen);
     const QSize dlgSize = m_connPanel->size();
+    QMargins frameMargins;
+    if (m_connPanel->windowHandle()) {
+        frameMargins = m_connPanel->windowHandle()->frameMargins();
+    }
+    if (frameMargins.isNull()
+        && !m_connPanel->windowFlags().testFlag(Qt::FramelessWindowHint)) {
+        const int border = m_connPanel->style()->pixelMetric(
+            QStyle::PM_DefaultFrameWidth, nullptr, m_connPanel);
+        const int titleHeight = m_connPanel->style()->pixelMetric(
+            QStyle::PM_TitleBarHeight, nullptr, m_connPanel);
+        frameMargins = QMargins(border, titleHeight, border, border);
+    }
+    const QSize frameSize(
+        dlgSize.width() + frameMargins.left() + frameMargins.right(),
+        dlgSize.height() + frameMargins.top() + frameMargins.bottom());
     QPoint pos(labelCenter.x() - dlgSize.width() / 2,
                statusBarTop.y() - dlgSize.height() - 8);
 
     if (screen) {
         const QRect available = screen->availableGeometry();
-        const int maxX = available.left() + available.width() - dlgSize.width();
-        const int maxY = available.top() + available.height() - dlgSize.height();
+        pos -= QPoint(frameMargins.left(), frameMargins.top());
+        const int maxX = available.left() + available.width() - frameSize.width();
+        const int maxY = available.top() + available.height() - frameSize.height();
         pos.setX(qMax(available.left(), qMin(pos.x(), maxX)));
         pos.setY(qMax(available.top(), qMin(pos.y(), maxY)));
+        pos += QPoint(frameMargins.left(), frameMargins.top());
     }
 
     m_connPanel->move(pos);
@@ -4083,7 +4102,7 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    m_connPanel->setMinimumSize(640, 580);
+    m_connPanel->setMinimumSize(640, 360);
     m_connPanel->resize(760, 660);
     m_connPanel->hide();
 
@@ -5608,7 +5627,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 s.remove("LastConnectedRadioSerial");
                 s.remove("LastRoutedRadioIp");
                 s.save();
-                m_connPanel->show();
+                showConnectionDialog();
             });
             m_reconnectDlg->show();
         }
