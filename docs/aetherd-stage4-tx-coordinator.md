@@ -47,6 +47,35 @@ display/preflight metadata, never the owner or a permission grant.
 
 ## Primary paths
 
+### Producer contribution handles
+
+`TxCoordinator::Intent` identifies one contribution to an already admitted
+operation. It does not acquire an actor grant or start TX. Repeated admission
+with the same live handle is idempotent; independently held handles remain
+independent even inside the shared desktop operation. The registry is bounded
+to 256 outstanding contributions. Ending a contribution returns its slot, and
+session reset, forced stop and destruction retire the remaining handles.
+
+Release is marked before invoking callbacks or enqueueing cleanup. An ensuing
+reengagement gets a new handle while the earlier normal tail remains pending.
+The queue callback ends its captured handle exactly once, including when a
+newer contribution has started. Neither a duplicate callback nor a handle from
+another coordinator can retire the current contribution. A pending contribution
+blocks `finishLocalIntent()` even if the caller incorrectly attempts completion.
+All mutation remains on the engine thread; workers may inspect the atomic fence.
+
+The production MOX, TUNE, ATU, straight-key, CW PTT and CWX paths now retain
+these handles. The derived activity mask is only a compatibility view for
+existing interlocks/cleanup, not release authority. The historical operation
+activity mask still records which radio-buffered paths might need cleanup.
+
+This increment keeps one compatibility slot per existing activity entry point.
+It does not yet assign separate CAT/TCI/bridge/keyer clients to slots, change
+which activities may overlap, or carry intent fences through every terminal
+writer and audio queue. Those conversions must retain handles at the actual
+producer boundary, not infer identity from activity type or a display string.
+Normal tail consumption remains local bookkeeping, never radio-stop proof.
+
 | Intent | Engine route |
 | --- | --- |
 | MOX/PTT | TransmitModel admission, RadioModel, `IRadioBackend::setKeying` |

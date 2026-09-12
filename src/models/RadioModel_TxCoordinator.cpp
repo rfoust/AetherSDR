@@ -82,20 +82,35 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
         m_txOperationActivities = 0;
     }
     m_txOperation = admission.operation;
-    m_txActivities |= static_cast<unsigned>(activity);
+    const TxCoordinator::Intent intent = m_txCoordinator.beginIntent(
+        m_txOperation, m_localTxIntents.value(activity), activity);
+    if (!intent.pending()) {
+        qCWarning(lcProtocol) << "RadioModel: TX producer intent could not be registered";
+        completeLocalTxIfDrained();
+        return false;
+    }
+    m_localTxIntents.insert(activity, intent);
     m_txOperationActivities |= static_cast<unsigned>(activity);
     return true;
 }
 
-void RadioModel::endLocalTxActivity(TxActivity activity)
+void RadioModel::endLocalTxActivity(const TxCoordinator::Intent& intent)
 {
-    m_txActivities &= ~static_cast<unsigned>(activity);
-    completeLocalTxIfDrained();
+    if (m_txCoordinator.endIntent(intent)) {
+        completeLocalTxIfDrained();
+    }
+}
+
+unsigned RadioModel::activeTxActivities() const
+{
+    // Include older draining contributions, not just the current compatibility
+    // slot. A later completed edge cannot hide an earlier pending CW tail.
+    return m_txCoordinator.activeActivities(m_txOperation);
 }
 
 void RadioModel::completeLocalTxIfDrained()
 {
-    if (m_txActivities == 0 && m_pendingTxDeliveries == 0) {
+    if (!m_txCoordinator.hasIntents(m_txOperation) && m_pendingTxDeliveries == 0) {
         // Existing desktop sequencers explicitly end their local intent. This
         // fences pending work; it is NOT a claim that the radio is observed RX.
         // The coordinator retains this actor's ownership until qualified
@@ -160,7 +175,7 @@ void RadioModel::stopTxOperation(const TxCoordinator::Operation& operation,
     // TxCoordinator has already invalidated the keying fence and entered
     // recovery. All cleanup below is key-up/bypass/abort; never re-admit it.
     requestTransmitStop(operation);
-    m_txActivities = 0;
+    m_localTxIntents.clear();
     m_txOperation = operation;
     // No acknowledgment here: queued stop commands are not stopped-radio
     // evidence. The lifecycle caller acknowledges only after transport loss.
@@ -179,7 +194,7 @@ void RadioModel::requestTransmitStop(const TxCoordinator::Operation& operation)
     if (!current()) {
         return;
     }
-    const unsigned activities = m_txActivities;
+    const unsigned activities = activeTxActivities();
     const bool hadCwx = m_txOperationActivities & static_cast<unsigned>(TxActivity::Cwx);
     m_transmitModel.cancelPttRelease();
     if (current() && hadCwx) {
@@ -216,7 +231,7 @@ void RadioModel::resetTxOperations()
     m_transmitModel.cancelPttRelease();
     m_txCoordinator.reset();
     m_cwxModel.resetDrainWatch();
-    m_txActivities = 0;
+    m_localTxIntents.clear();
 }
 
 void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceId,

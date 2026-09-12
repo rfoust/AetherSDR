@@ -1,6 +1,7 @@
 #include "RadioModel.h"
 #include "models/AprsDigipeaterModel.h"
 #include <QPointer>
+#include <QScopeGuard>
 #include "core/GuiClientIdentityPolicy.h"
 #include "AntennaAliasStore.h"
 #include "BandDefs.h"
@@ -2036,8 +2037,10 @@ RadioModel::RadioModel(QObject* parent)
         if (!admitted) {
             return {};
         }
-        const TxCoordinator::Operation operation = m_txOperation;
-        return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
+        const TxActivity activity = intent == TransmitModel::KeyingIntent::Mox ? TxActivity::Mox
+            : intent == TransmitModel::KeyingIntent::Tune ? TxActivity::Tune : TxActivity::Atu;
+        const TxCoordinator::Intent contribution = m_localTxIntents.value(activity);
+        return [contribution] { return contribution.permitsDispatch(txMonotonicMs()); };
     });
     // Register the typed seam-delta payloads so IRadioBackend's normalized
     // signals survive a queued connection. Today decode*Status runs synchronously
@@ -2292,8 +2295,12 @@ RadioModel::RadioModel(QObject* parent)
     // BYPASS remains unconditional, including after a refused start (#5558).
     connect(&m_transmitModel, &TransmitModel::atuCommandIssued, this,
             [this](bool start) {
-        const quint64 commandEpoch = ++m_atuCommandEpoch;
+        ++m_atuCommandEpoch;
         const TxCoordinator::Operation operation = m_txOperation;
+        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Atu);
+        if (!start) {
+            (void)m_txCoordinator.requestIntentEnd(intent);
+        }
         if (start) {
             m_transmitModel.noteActivePttSource(TransmitModel::PttSource::Atu);
             armInterlockNotification(TransmitModel::PttSource::Atu);
@@ -2302,8 +2309,8 @@ RadioModel::RadioModel(QObject* parent)
         if (m_backend && (!start || operation.permitsDispatch(txMonotonicMs()))) {
             m_backend->setAtu(start);
         }
-        if (!start && commandEpoch == m_atuCommandEpoch) {
-            endLocalTxActivity(TxActivity::Atu);
+        if (!start) {
+            endLocalTxActivity(intent);
         }
     });
     connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
@@ -2320,6 +2327,10 @@ RadioModel::RadioModel(QObject* parent)
             [this](bool on) {
         const quint64 commandEpoch = ++m_tuneCommandEpoch;
         const TxCoordinator::Operation operation = m_txOperation;
+        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Tune);
+        if (!on) {
+            (void)m_txCoordinator.requestIntentEnd(intent);
+        }
         if (on) {
             armInterlockNotification(m_transmitModel.activePttSource());
             applyTuneInhibit();
@@ -2330,8 +2341,8 @@ RadioModel::RadioModel(QObject* parent)
                 publishCommandedBackendTransmitEdge(on);
             }
         }
-        if (!on && commandEpoch == m_tuneCommandEpoch) {
-            endLocalTxActivity(TxActivity::Tune);
+        if (!on) {
+            endLocalTxActivity(intent);
         }
     });
 
@@ -2416,7 +2427,7 @@ RadioModel::RadioModel(QObject* parent)
             static_cast<unsigned>(TxActivity::CwKey)
             | static_cast<unsigned>(TxActivity::Cwx);
         if (m_cwKeyActive || m_cwPaddleHeld || m_cwxActive
-            || (m_txActivities & kCwActivities) != 0) {
+            || (activeTxActivities() & kCwActivities) != 0) {
             return tr("TUNE not started: CW is keyed");
         }
         return {};
@@ -2513,8 +2524,8 @@ RadioModel::RadioModel(QObject* parent)
         if (!beginLocalTxActivity(TxActivity::Cwx)) {
             return {};
         }
-        const TxCoordinator::Operation operation = m_txOperation;
-        return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
+        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Cwx);
+        return [intent] { return intent.permitsDispatch(txMonotonicMs()); };
     });
     connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
         // Non-Flex text keyers consume the neutral transmissionRequested /
@@ -2559,23 +2570,22 @@ RadioModel::RadioModel(QObject* parent)
         return rejection.isEmpty();
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
-        const TxCoordinator::Operation operation = m_txOperation;
-        const int epoch = m_cwxModel.drainEpoch();
+        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Cwx);
+        (void)m_txCoordinator.requestIntentEnd(intent);
         m_cwxActive = false;
         m_cwxDrainArmed = false;
         if (m_backend && !usesFlexCommandPlane()
             && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->abortCwText();
         }
-        if (operation.sameOperation(m_txOperation) && epoch == m_cwxModel.drainEpoch()) {
-            endLocalTxActivity(TxActivity::Cwx);
-        }
+        endLocalTxActivity(intent);
     });
     connect(&m_cwxModel, &CwxModel::transmissionDispatched, this,
             [this](int epoch, bool untrackedMacro) {
         if (epoch != m_cwxModel.drainEpoch()) {
             return;
         }
+        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Cwx);
         if (!usesFlexCommandPlane() || untrackedMacro) {
             // CI-V has no text-progress readback, and an unsynced Flex macro
             // has no client-side end index. Complete only the local handoff.
@@ -2586,7 +2596,7 @@ RadioModel::RadioModel(QObject* parent)
                 m_cwxDrainArmed = false;
                 m_cwxModel.abandonDrainWatch();
             }
-            endLocalTxActivity(TxActivity::Cwx);
+            endLocalTxActivity(intent);
         }
     });
     // Final cwx send of each macro/text block goes via replyCommandReady so we
@@ -2626,8 +2636,8 @@ RadioModel::RadioModel(QObject* parent)
         if (!m_cwxDrainArmed) return;
         m_cwxDrainArmed = false;
         m_cwxActive = false;
-        endLocalTxActivity(TxActivity::Cwx);
-        if (m_txActivities == 0) {
+        endLocalTxActivity(m_localTxIntents.value(TxActivity::Cwx));
+        if (!m_txCoordinator.hasIntents(m_txOperation)) {
             m_transmitModel.setMox(false);
         }
     });
@@ -2745,13 +2755,13 @@ RadioModel::~RadioModel()
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
     if (m_backend) {
-        if (m_txActivities & static_cast<unsigned>(TxActivity::Tune)) {
+        if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower());
         }
-        if (m_txActivities & static_cast<unsigned>(TxActivity::Atu)) {
+        if (activeTxActivities() & static_cast<unsigned>(TxActivity::Atu)) {
             m_backend->setAtu(false);
         }
-        if (m_txActivities & static_cast<unsigned>(TxActivity::Cwx)) {
+        if (activeTxActivities() & static_cast<unsigned>(TxActivity::Cwx)) {
             m_backend->abortCwText();
         }
     }
@@ -4574,6 +4584,7 @@ bool RadioModel::refuseKeyWithInterlock(const QString& message, const QString& k
 void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
 {
     const TxCoordinator::Operation operation = m_txOperation;
+    const TxCoordinator::Intent atuIntent = m_localTxIntents.value(TxActivity::Atu);
     const quint64 atuEpoch = m_atuCommandEpoch;
     // Backend MOX is radio state, not local intent; don't echo it into the
     // signal that drives this client's audio, DAX, recorder and serial PTT.
@@ -4583,11 +4594,11 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     m_transmitModel.applyChanges(delta);
     if (delta.atuStatusRaw && operation.sameOperation(m_txOperation)
         && atuEpoch == m_atuCommandEpoch
-        && (m_txActivities & static_cast<unsigned>(TxActivity::Atu))) {
+        && atuIntent.pending()) {
         const ATUStatus status = m_transmitModel.atuStatus();
         if (status != ATUStatus::InProgress && status != ATUStatus::None
             && status != ATUStatus::NotStarted) {
-            endLocalTxActivity(TxActivity::Atu);
+            endLocalTxActivity(atuIntent);
         }
     }
     if (delta.cwSpeed && !usesFlexCommandPlane()) {
@@ -4662,6 +4673,16 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     // while radio interlock transitions through intermediate states.
     m_txRequested = tx;
     const TxCoordinator::Operation operation = m_txOperation;
+    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Mox);
+    if (!tx) {
+        (void)m_txCoordinator.requestIntentEnd(intent);
+    }
+    const QPointer<RadioModel> receiver(this);
+    const auto finishIntent = qScopeGuard([receiver, intent, tx] {
+        if (!tx && receiver) {
+            receiver->endLocalTxActivity(intent);
+        }
+    });
     const quint64 commandEpoch = ++m_txCommandEpoch;
 
     // Optimistic edge gating:
@@ -4704,9 +4725,6 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 
     if (commandEpoch == m_txCommandEpoch) {
         publishCommandedBackendTransmitEdge(tx);
-    }
-    if (!tx && commandEpoch == m_txCommandEpoch) {
-        endLocalTxActivity(TxActivity::Mox);
     }
 }
 
@@ -4934,8 +4952,10 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     if (down && !beginLocalTxActivity(TxActivity::CwKey)) {
         return;
     }
-    const quint64 deliveryEpoch = ++m_cwKeyDeliveryEpoch;
-    const TxCoordinator::Operation operation = m_txOperation;
+    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::CwKey);
+    if (!down) {
+        (void)m_txCoordinator.requestIntentEnd(intent);
+    }
     bool deferred = false;
     // Send only the key edge — the radio's break-in setting decides whether
     // it transmits.  With break_in=1 (QSK), `cw key 1` triggers TX and
@@ -4949,9 +4969,9 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
         }
     } else {
         deferred = sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                         debugSource, debugTraceId, debugSourceMs, {}, [this, down, operation, deliveryEpoch] {
-            if (!down && deliveryEpoch == m_cwKeyDeliveryEpoch && operation.sameOperation(m_txOperation)) {
-                endLocalTxActivity(TxActivity::CwKey);
+                         debugSource, debugTraceId, debugSourceMs, {}, [this, down, intent] {
+            if (!down) {
+                endLocalTxActivity(intent);
             }
         });
     }
@@ -4960,7 +4980,7 @@ void RadioModel::sendCwKey(bool down, const QString& debugSource,
     if (prev != down)
         emit cwKeyDownChanged(down);
     if (!down && !deferred) {
-        endLocalTxActivity(TxActivity::CwKey);
+        endLocalTxActivity(intent);
     }
 }
 
@@ -4983,21 +5003,23 @@ void RadioModel::sendCwPtt(bool on, const QString& debugSource,
     if (on && !beginLocalTxActivity(TxActivity::CwPtt)) {
         return;
     }
-    const quint64 deliveryEpoch = ++m_cwPttDeliveryEpoch;
-    const TxCoordinator::Operation operation = m_txOperation;
+    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::CwPtt);
+    if (!on) {
+        (void)m_txCoordinator.requestIntentEnd(intent);
+    }
     bool deferred = false;
     if (m_backend && !usesFlexCommandPlane()) {
         m_backend->setKeying(on);
     } else {
         deferred = sendNetCwCommand(on ? QStringLiteral("cw ptt 1") : QStringLiteral("cw ptt 0"),
-                         debugSource, debugTraceId, debugSourceMs, {}, [this, on, operation, deliveryEpoch] {
-            if (!on && deliveryEpoch == m_cwPttDeliveryEpoch && operation.sameOperation(m_txOperation)) {
-                endLocalTxActivity(TxActivity::CwPtt);
+                         debugSource, debugTraceId, debugSourceMs, {}, [this, on, intent] {
+            if (!on) {
+                endLocalTxActivity(intent);
             }
         });
     }
     if (!on && !deferred) {
-        endLocalTxActivity(TxActivity::CwPtt);
+        endLocalTxActivity(intent);
     }
 }
 
@@ -5015,8 +5037,10 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
     if (down && !beginLocalTxActivity(TxActivity::CwKey)) {
         return;
     }
-    const quint64 deliveryEpoch = ++m_cwKeyDeliveryEpoch;
-    const TxCoordinator::Operation operation = m_txOperation;
+    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::CwKey);
+    if (!down) {
+        (void)m_txCoordinator.requestIntentEnd(intent);
+    }
     bool deferred = false;
     if (m_backend && !usesFlexCommandPlane()) {
         // `scheduledAt` stops here on this branch: setCwKeying() carries no
@@ -5029,9 +5053,9 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
         }
     } else {
         deferred = sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                         debugSource, debugTraceId, debugSourceMs, scheduledAt, [this, down, operation, deliveryEpoch] {
-            if (!down && deliveryEpoch == m_cwKeyDeliveryEpoch && operation.sameOperation(m_txOperation)) {
-                endLocalTxActivity(TxActivity::CwKey);
+                         debugSource, debugTraceId, debugSourceMs, scheduledAt, [this, down, intent] {
+            if (!down) {
+                endLocalTxActivity(intent);
             }
         });
     }
@@ -5046,7 +5070,7 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
     // the TX-ownership interlock alongside m_cwxActive.
     m_cwKeyActive = down;
     if (!down && !deferred) {
-        endLocalTxActivity(TxActivity::CwKey);
+        endLocalTxActivity(intent);
     }
 }
 

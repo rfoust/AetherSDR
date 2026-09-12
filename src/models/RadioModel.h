@@ -1777,21 +1777,22 @@ private:
     TxCoordinator m_txCoordinator;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
-    enum class TxActivity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
-    unsigned m_txActivities{0};
+    using TxActivity = TxCoordinator::Activity;
+    // One handle per existing compatibility entry point, not per client yet.
+    // Future producers retain their own handles rather than sharing these slots.
+    QMap<TxActivity, TxCoordinator::Intent> m_localTxIntents;
     unsigned m_txOperationActivities{0}; // includes radio-buffered tails after local handoff
     unsigned m_pendingTxDeliveries{0};
     bool m_txSessionClosing{false};
     quint64 m_txCommandEpoch{0};
     quint64 m_tuneCommandEpoch{0};
     quint64 m_atuCommandEpoch{0};
-    quint64 m_cwKeyDeliveryEpoch{0};
-    quint64 m_cwPttDeliveryEpoch{0};
     std::atomic<quint64> m_cwInputSession{0};
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
-    void endLocalTxActivity(TxActivity activity);
+    void endLocalTxActivity(const TxCoordinator::Intent& intent);
+    unsigned activeTxActivities() const;
     void completeLocalTxIfDrained();
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
     void sendTxKeyingCommand(const QString& command, bool keying);

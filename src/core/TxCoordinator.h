@@ -16,8 +16,10 @@ namespace AetherSDR {
 class TxCoordinator final {
     struct ActorState;
     struct OperationState;
+    struct IntentState;
 
 public:
+    enum class Activity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
     class Actor {
     public:
         Actor() = default;
@@ -41,6 +43,20 @@ public:
         std::shared_ptr<OperationState> m_state;
     };
 
+    // One producer's contribution to an admitted operation. The producer keeps
+    // its own handle and passes copies to delayed release callbacks. A handle
+    // is not an actor grant, and ending it is not radio-idle evidence.
+    class Intent {
+    public:
+        Intent() = default;
+        [[nodiscard]] bool pending() const;
+        [[nodiscard]] bool permitsDispatch(qint64 monotonicMs) const;
+        [[nodiscard]] bool sameIntent(const Intent& other) const;
+    private:
+        friend class TxCoordinator;
+        std::shared_ptr<IntentState> m_state;
+    };
+
     struct ActorPolicy {
         bool mayTransmit{false};
         // Zero means no new timeout for an existing local operator workflow.
@@ -58,6 +74,7 @@ public:
     enum class StopReason { OwnerCancelled, ActorRevoked, Expired, Reset, Emergency };
     using StopHandler = std::function<void(const Operation&, StopReason)>;
     static constexpr int kMaximumActors = 64;
+    static constexpr int kMaximumIntents = 256;
 
     explicit TxCoordinator(StopHandler stopHandler);
     ~TxCoordinator();
@@ -66,6 +83,16 @@ public:
 
     [[nodiscard]] Actor registerActor(ActorPolicy policy);
     [[nodiscard]] Admission acquire(const Actor& actor, qint64 monotonicMs);
+    // Repeated admission by the same producer reuses its live handle; it does
+    // not accumulate reference-counted holds. Distinct producers use distinct
+    // handles even when sharing the transitional desktop actor/operation.
+    [[nodiscard]] Intent beginIntent(const Operation& operation, const Intent& previous, Activity activity);
+    // Mark release BEFORE invoking callbacks or enqueueing cleanup. A new
+    // request then gets a distinct handle while this one's queued tail drains.
+    [[nodiscard]] bool requestIntentEnd(const Intent& intent);
+    [[nodiscard]] bool endIntent(const Intent& intent);
+    [[nodiscard]] bool hasIntents(const Operation& operation) const;
+    [[nodiscard]] unsigned activeActivities(const Operation& operation) const;
     // Stop-only delivery fence, including when no operation was acquired.
     // It conveys no key-on, ownership, completion or acknowledgment authority.
     [[nodiscard]] Operation cleanupFence() const;
@@ -114,14 +141,22 @@ private:
         qint64 maximumMs{0};
         quint64 generation{0};
     };
+    struct IntentState {
+        Operation operation;
+        Activity activity{Activity::Mox};
+        std::atomic<bool> ended{false};
+        bool finishing{false}; // owner-thread only; not the worker dispatch fence
+    };
 
     [[nodiscard]] bool onThread() const;
     [[nodiscard]] bool validActor(const Actor& actor) const;
     void stop(StopReason reason);
+    void endIntents(const Operation& operation);
 
     QThread* const m_thread;
     std::shared_ptr<Identity> m_identity;
     std::vector<std::weak_ptr<ActorState>> m_actors;
+    std::vector<std::shared_ptr<IntentState>> m_intents;
     Operation m_active;
     Operation m_unconfirmed;
     Operation m_stopping;

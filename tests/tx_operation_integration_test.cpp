@@ -29,6 +29,19 @@ public:
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
     static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
+    static TxCoordinator::Intent moxIntent(const RadioModel& radio)
+    {
+        return radio.m_localTxIntents.value(RadioModel::TxActivity::Mox);
+    }
+    static TxCoordinator::Intent cwIntent(const RadioModel& radio, bool ptt)
+    {
+        return radio.m_localTxIntents.value(
+            ptt ? RadioModel::TxActivity::CwPtt : RadioModel::TxActivity::CwKey);
+    }
+    static void finishIntent(RadioModel& radio, const TxCoordinator::Intent& intent)
+    {
+        radio.endLocalTxActivity(intent);
+    }
     static void bindTxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
         encoder.setTxCommandSink([&radio](const QString& command, bool keying) {
@@ -141,6 +154,62 @@ struct Fixture {
         commands.clear();
     }
 };
+
+void perIntentCompletion()
+{
+    Fixture f;
+    f.radio.setTransmit(true);
+    const auto operation = f.radio.transmitOperation();
+    const auto original = TxOperationIntegrationTestAccess::moxIntent(f.radio);
+    f.radio.setTransmit(true);
+    check(TxOperationIntegrationTestAccess::moxIntent(f.radio).sameIntent(original),
+          "repeated production MOX intent does not accumulate hidden holds");
+    bool replace = true;
+    f.backend->keyingWriter = [&](bool on) {
+        if (!on && replace) {
+            replace = false;
+            f.radio.setTransmit(true);
+        }
+    };
+    f.radio.setTransmit(false);
+    const auto replacement = TxOperationIntegrationTestAccess::moxIntent(f.radio);
+    check(replacement.pending() && !replacement.sameIntent(original) && !original.pending(),
+          "reentrant MOX reengagement has a new handle while old release retires");
+    TxOperationIntegrationTestAccess::finishIntent(f.radio, original);
+    check(replacement.pending() && operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "duplicate old producer release cannot end the reengaged operation");
+    f.radio.setTransmit(false);
+    check(!replacement.pending() && !operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "new producer release drains normally with no orphaned prior hold");
+
+    f.radio.setTransmit(true);
+    const auto shared = f.radio.transmitOperation();
+    auto& coordinator = TxOperationIntegrationTestAccess::coordinator(f.radio);
+    const auto additional = coordinator.beginIntent(shared, {}, TxCoordinator::Activity::Mox);
+    f.radio.setTransmit(false);
+    check(additional.pending() && shared.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "production MOX completion does not erase a second producer contribution");
+    TxOperationIntegrationTestAccess::finishIntent(f.radio, additional);
+    check(!shared.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "last captured producer completion ends only local intent");
+
+    f.radio.setTransmit(true);
+    const auto cwOperation = f.radio.transmitOperation();
+    const auto olderCw = coordinator.beginIntent(cwOperation, {}, TxCoordinator::Activity::CwKey);
+    check(coordinator.requestIntentEnd(olderCw), "earlier CW contribution enters local drain");
+    const auto newerCw = coordinator.beginIntent(cwOperation, olderCw, TxCoordinator::Activity::CwKey);
+    TxOperationIntegrationTestAccess::finishIntent(f.radio, newerCw);
+    f.commands.clear();
+    f.radio.transmitModel().startTune();
+    check(!f.commands.contains(QStringLiteral("tune:on")) && !f.radio.transmitModel().isTuning(),
+          "earlier draining CW keeps production TUNE interlock closed after a newer edge ends");
+    TxOperationIntegrationTestAccess::finishIntent(f.radio, olderCw);
+    f.radio.transmitModel().startTune();
+    check(f.commands.contains(QStringLiteral("tune:on")),
+          "TUNE becomes available after all local CW contributions drain");
+    f.radio.transmitModel().stopTune();
+    f.radio.setTransmit(false);
+}
 
 void primaryRoutes()
 {
@@ -778,6 +847,55 @@ void flexCwxLifecycle()
           "abandoning an unknown-length drain watch preserves queued text and macro tail");
 }
 
+void overlappingCwContributions()
+{
+    for (const bool withUdp : {false, true}) {
+        for (int route = 0; route != 3; ++route) {
+            QStringList tcp;
+            QList<QByteArray> udp;
+            RadioConnection connection;
+            PanadapterStream stream;
+            Fixture f;
+            TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+            if (withUdp) {
+                TxOperationIntegrationTestAccess::injectNetCwTransport(f.radio, stream,
+                    [&](const QByteArray& packet) { udp << packet; });
+            }
+            const auto send = [&](bool down) {
+                if (route == 0) {
+                    f.radio.sendCwKey(down);
+                } else if (route == 1) {
+                    f.radio.sendCwKeyEdge(down);
+                } else {
+                    f.radio.sendCwPtt(down);
+                }
+            };
+            send(true);
+            const auto operation = f.radio.transmitOperation();
+            const auto first = TxOperationIntegrationTestAccess::cwIntent(f.radio, route == 2);
+            send(false);
+            send(true);
+            const auto replacement = TxOperationIntegrationTestAccess::cwIntent(f.radio, route == 2);
+            check(first.pending() && replacement.pending() && !first.sameIntent(replacement),
+                  "queued CW reengagement retains distinct old and current contributions");
+            QEventLoop loop;
+            QTimer::singleShot(60, &loop, &QEventLoop::quit);
+            loop.exec();
+            check(!first.pending() && replacement.pending()
+                      && operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+                  "old CW queue completion retires only its captured contribution");
+            check(tcp.size() == 3 && (!withUdp || udp.size() == 12),
+                  "reengagement preserves normal queued down/up/down transport delivery");
+            send(false);
+            QTimer::singleShot(60, &loop, &QEventLoop::quit);
+            loop.exec();
+            check(!replacement.pending() && !operation.permitsDispatch(std::numeric_limits<qint64>::max())
+                      && tcp.size() == 4 && (!withUdp || udp.size() == 16),
+                  "final CW release drains all contributions without an orphaned hold");
+        }
+    }
+}
+
 void queuedNetCwEdges()
 {
     QList<QByteArray> packets;
@@ -918,6 +1036,8 @@ int main(int argc, char** argv)
     if (!settings.isValid()) { return 1; }
     QCoreApplication app(argc, argv);
     primaryRoutes();
+    perIntentCompletion();
+    overlappingCwContributions();
     refusedStartsAndUnconditionalStops();
     localCompletionDoesNotAuthorizeHandoff();
     cwTuneMutualExclusion();

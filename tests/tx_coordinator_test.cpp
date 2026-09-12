@@ -9,6 +9,7 @@
 #include <vector>
 
 using AetherSDR::TxCoordinator;
+using Activity = TxCoordinator::Activity;
 
 namespace {
 int failures = 0;
@@ -326,6 +327,105 @@ void stopOnlyFences()
     check(coordinator.acquire(actor, 0).accepted(), "owner starts after idle cleanup fence");
     check(!fence.permitsCleanup(), "idle queued key-up cannot affect a newer operation");
 }
+
+void producerIntents()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto actor = coordinator.registerActor({true, 0});
+    const auto competitor = coordinator.registerActor({true, 0});
+    const auto operation = coordinator.acquire(actor, 100).operation;
+    const auto first = coordinator.beginIntent(operation, {}, Activity::Mox);
+    const auto second = coordinator.beginIntent(operation, {}, Activity::Cwx);
+    check(first.pending() && second.pending() && !first.sameIntent(second),
+          "two producers sharing an operation receive distinct intent handles");
+    check(!coordinator.beginIntent(operation, first, Activity::CwKey).pending(),
+          "a live handle cannot be reused for a different activity");
+    check(!coordinator.beginIntent(operation, {}, static_cast<Activity>(3)).pending(),
+          "a combined activity value cannot masquerade as one producer intent");
+    check(coordinator.beginIntent(operation, first, Activity::Mox).sameIntent(first),
+          "repeated producer admission is idempotent, not another hold");
+    check(!coordinator.finishLocalIntent(operation),
+          "operation completion cannot bypass outstanding producer intents");
+    check(coordinator.requestIntentEnd(first) && first.permitsDispatch(101),
+          "normal release retains the original producer tail until consumed");
+    check(coordinator.activeActivities(operation)
+              == (static_cast<unsigned>(Activity::Mox) | static_cast<unsigned>(Activity::Cwx)),
+          "draining contributions remain visible to activity interlocks");
+    const auto reengaged = coordinator.beginIntent(operation, first, Activity::Mox);
+    check(reengaged.pending() && !reengaged.sameIntent(first),
+          "reengagement during an old tail creates a distinct intent");
+    check(coordinator.endIntent(first) && !coordinator.endIntent(first),
+          "a captured release is consumed exactly once");
+    check(!first.permitsDispatch(102) && second.permitsDispatch(102)
+              && reengaged.permitsDispatch(102),
+          "old release fences only its producer contribution");
+    check(coordinator.endIntent(second) && !coordinator.finishLocalIntent(operation),
+          "finishing a second producer cannot end the reengaged contribution");
+    check(coordinator.activeActivities(operation) == static_cast<unsigned>(Activity::Mox),
+          "derived activity view drops only the finished contribution's type");
+    check(coordinator.endIntent(reengaged) && !coordinator.hasIntents(operation)
+              && coordinator.finishLocalIntent(operation),
+          "local operation completion becomes possible after every contribution ends");
+    check(coordinator.acquire(competitor, 103).refusal == TxCoordinator::Refusal::Busy,
+          "ending all producer intents is still not radio-idle handoff evidence");
+    const auto next = coordinator.acquire(actor, 104).operation;
+    const auto nextIntent = coordinator.beginIntent(next, reengaged, Activity::Mox);
+    check(!coordinator.endIntent(first) && nextIntent.permitsDispatch(105),
+          "an old producer callback cannot affect the next operation");
+    coordinator.reset();
+    check(!nextIntent.pending() && !nextIntent.permitsDispatch(106)
+              && !coordinator.hasIntents(next) && coordinator.activeActivities(next) == 0,
+          "session reset retires every producer contribution");
+}
+
+void intentBoundaries()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    TxCoordinator other([](const auto&, auto) {});
+    const auto actor = coordinator.registerActor({true, 20});
+    const auto operation = coordinator.acquire(actor, 0).operation;
+    const auto otherOperation = other.acquire(other.registerActor({true, 0}), 0).operation;
+    const auto foreign = other.beginIntent(otherOperation, {}, Activity::Mox);
+    check(!coordinator.beginIntent(otherOperation, {}, Activity::Mox).pending()
+              && !coordinator.beginIntent(operation, foreign, Activity::Mox).pending()
+              && !coordinator.endIntent(foreign)
+              && !coordinator.requestIntentEnd(foreign),
+          "foreign operations and producer handles cannot cross coordinators");
+    check(!coordinator.beginIntent(coordinator.cleanupFence(), {}, Activity::Mox).pending(),
+          "a cleanup-only fence cannot create a producer intent");
+    std::vector<TxCoordinator::Intent> intents;
+    for (int i = 0; i < TxCoordinator::kMaximumIntents; ++i) {
+        intents.push_back(coordinator.beginIntent(operation, {}, Activity::Mox));
+        check(intents.back().pending(), "producer intent fits within bounded registry");
+    }
+    check(!coordinator.beginIntent(operation, {}, Activity::Mox).pending(), "producer registry refuses overflow");
+    check(coordinator.beginIntent(operation, intents.front(), Activity::Mox).sameIntent(intents.front()),
+          "a repeated intent still succeeds at registry capacity");
+    check(coordinator.endIntent(intents.front())
+              && coordinator.beginIntent(operation, {}, Activity::Mox).pending(),
+          "finished producer releases its bounded registry slot");
+    const auto live = intents.back();
+    bool threadChecks = false;
+    std::unique_ptr<QThread> worker(QThread::create([&] {
+        threadChecks = !coordinator.beginIntent(operation, {}, Activity::Mox).pending()
+            && !coordinator.requestIntentEnd(live) && !coordinator.endIntent(live)
+            && live.permitsDispatch(19) && !live.permitsDispatch(20);
+    }));
+    worker->start();
+    worker->wait();
+    check(threadChecks, "worker may inspect fences but cannot mutate producer ownership");
+    coordinator.expire(20);
+    check(!live.pending() && !coordinator.hasIntents(operation),
+          "expiry retires producers without depending on their release callbacks");
+    TxCoordinator::Intent orphan;
+    {
+        TxCoordinator shortLived([](const auto&, auto) {});
+        const auto temporary = shortLived.acquire(shortLived.registerActor({true, 0}), 0).operation;
+        orphan = shortLived.beginIntent(temporary, {}, Activity::Mox);
+    }
+    check(!orphan.pending() && !orphan.permitsDispatch(1),
+          "coordinator destruction invalidates copied producer handles");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -340,5 +440,7 @@ int main(int argc, char** argv)
     limitsAndThread();
     acknowledgedCallbackCannotReenter();
     stopOnlyFences();
+    producerIntents();
+    intentBoundaries();
     return failures ? 1 : 0;
 }

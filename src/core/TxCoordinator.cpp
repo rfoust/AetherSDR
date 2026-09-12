@@ -32,6 +32,22 @@ bool TxCoordinator::Operation::permitsCleanup() const
     return identity && identity->generation.load(std::memory_order_acquire) == m_state->generation;
 }
 
+bool TxCoordinator::Intent::pending() const
+{
+    return m_state && !m_state->ended.load(std::memory_order_acquire)
+        && m_state->operation.permitsCleanup();
+}
+
+bool TxCoordinator::Intent::permitsDispatch(qint64 now) const
+{
+    return pending() && m_state->operation.permitsDispatch(now);
+}
+
+bool TxCoordinator::Intent::sameIntent(const Intent& other) const
+{
+    return m_state && m_state == other.m_state;
+}
+
 TxCoordinator::TxCoordinator(StopHandler stopHandler)
     : m_thread(QThread::currentThread())
     , m_identity(std::make_shared<Identity>())
@@ -48,6 +64,9 @@ TxCoordinator::~TxCoordinator()
     }
     if (m_stopping.m_state) {
         m_stopping.m_state->cancelled.store(true, std::memory_order_release);
+    }
+    for (const std::shared_ptr<IntentState>& intent : m_intents) {
+        intent->ended.store(true, std::memory_order_release);
     }
 }
 
@@ -131,6 +150,96 @@ bool TxCoordinator::owns(const Actor& actor, const Operation& operation) const
                 && m_unconfirmed.m_state->actor == actor.m_state));
 }
 
+TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
+                                                const Intent& previous, Activity activity)
+{
+    const unsigned activityBit = static_cast<unsigned>(activity);
+    if (!onThread() || !m_active.sameOperation(operation)
+        || m_active.m_state->cancelled.load(std::memory_order_acquire)
+        || activityBit == 0 || activityBit > static_cast<unsigned>(Activity::Cwx)
+        || (activityBit & (activityBit - 1)) != 0) {
+        return {};
+    }
+    if (previous.pending()) {
+        // An unrelated live handle is not this producer's reusable slot.
+        if (previous.m_state->operation.sameOperation(operation)
+            && previous.m_state->activity == activity
+            && std::find(m_intents.begin(), m_intents.end(), previous.m_state) != m_intents.end()) {
+            if (!previous.m_state->finishing) {
+                return previous;
+            }
+        } else {
+            return {};
+        }
+    }
+    if (m_intents.size() >= kMaximumIntents) {
+        return {};
+    }
+    Intent intent;
+    intent.m_state = std::make_shared<IntentState>();
+    intent.m_state->operation = operation;
+    intent.m_state->activity = activity;
+    m_intents.push_back(intent.m_state);
+    return intent;
+}
+
+bool TxCoordinator::requestIntentEnd(const Intent& intent)
+{
+    if (!onThread() || !intent.m_state
+        || std::find(m_intents.begin(), m_intents.end(), intent.m_state) == m_intents.end()) {
+        return false;
+    }
+    intent.m_state->finishing = true;
+    return true;
+}
+
+bool TxCoordinator::endIntent(const Intent& intent)
+{
+    if (!onThread() || !intent.m_state) {
+        return false;
+    }
+    const auto found = std::find(m_intents.begin(), m_intents.end(), intent.m_state);
+    if (found == m_intents.end()) {
+        return false;
+    }
+    intent.m_state->ended.store(true, std::memory_order_release);
+    m_intents.erase(found);
+    return true;
+}
+
+bool TxCoordinator::hasIntents(const Operation& operation) const
+{
+    return onThread() && std::any_of(m_intents.begin(), m_intents.end(),
+        [&operation](const std::shared_ptr<IntentState>& intent) {
+            return intent->operation.sameOperation(operation);
+        });
+}
+
+unsigned TxCoordinator::activeActivities(const Operation& operation) const
+{
+    if (!onThread()) {
+        return 0;
+    }
+    unsigned activities = 0;
+    for (const std::shared_ptr<IntentState>& intent : m_intents) {
+        if (intent->operation.sameOperation(operation)) {
+            activities |= static_cast<unsigned>(intent->activity);
+        }
+    }
+    return activities;
+}
+
+void TxCoordinator::endIntents(const Operation& operation)
+{
+    std::erase_if(m_intents, [&operation](const std::shared_ptr<IntentState>& intent) {
+        if (!intent->operation.sameOperation(operation)) {
+            return false;
+        }
+        intent->ended.store(true, std::memory_order_release);
+        return true;
+    });
+}
+
 TxCoordinator::Operation TxCoordinator::cleanupFence() const
 {
     if (!onThread()) {
@@ -146,7 +255,7 @@ TxCoordinator::Operation TxCoordinator::cleanupFence() const
 
 bool TxCoordinator::finishLocalIntent(const Operation& operation)
 {
-    if (!onThread() || !m_active.sameOperation(operation)) {
+    if (!onThread() || !m_active.sameOperation(operation) || hasIntents(operation)) {
         return false;
     }
     m_active.m_state->cancelled.store(true, std::memory_order_release);
@@ -169,6 +278,7 @@ void TxCoordinator::stop(StopReason reason)
     const Operation stopping = m_stopping;
     m_inStopHandler = true;
     m_stopHandler(stopping, reason);
+    endIntents(stopping);
     m_inStopHandler = false;
 }
 

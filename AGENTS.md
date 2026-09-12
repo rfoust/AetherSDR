@@ -561,6 +561,15 @@ TX widget invocations recheck the captured permission epoch at execution and
 claim only after admission. These are compatibility-operation safeguards, not
 per-socket actor grants or qualified radio-idle evidence.
 
+Local producer contributions now use opaque `TxCoordinator::Intent` handles,
+not activity bits as ownership. Repeat admission reuses a producer's live
+handle. Mark release before callbacks/queueing, retain the captured handle
+until its normal tail is consumed, and end that handle only. Reengagement gets
+a distinct handle so an earlier completion cannot release it. The coordinator
+refuses local operation completion while any contribution remains. The six
+legacy desktop entry points still share compatibility slots; this does not
+claim per-client identity or complete audio/terminal-writer fencing.
+
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
 `AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`
