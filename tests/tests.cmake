@@ -3133,6 +3133,18 @@ target_include_directories(cw_sidetone_device_match_test PRIVATE src)
 target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
 
+# The env-gated sample-exact edge probe both sidetone sinks feed (#5200). No
+# PortAudio and no audio device: scan() takes a plain interleaved stereo float
+# buffer, so the instrument is a pure function of its samples and runs on every
+# runner. The load-bearing row is the empty-stream reset — dump() used to skip
+# its reset when a stream recorded no edges, leaking that stream's whole sample
+# count into the next one, which silently displaced every position the probe
+# reported afterwards.
+add_executable(cw_sidetone_edge_probe_test tests/cw_sidetone_edge_probe_test.cpp)
+target_include_directories(cw_sidetone_edge_probe_test PRIVATE src)
+target_link_libraries(cw_sidetone_edge_probe_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_edge_probe_test COMMAND cw_sidetone_edge_probe_test)
+
 # #4281 — who owns the Client-Side QSO recorder's TX slot. Pure, header-only,
 # so the truth table is a compile-time assertion; the run-time rows carry the
 # labels. The static_assert on the function's own type is the regression pin:
@@ -3706,6 +3718,14 @@ target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
 target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
 
+
+# #5594 item 3: the capacity a Flex declares in discovery (max_slices /
+# max_panadapters), and that it is never confused with the adjacent
+# available_* availability keys. Socket-free.
+add_executable(radio_capacity_declaration_test tests/radio_capacity_declaration_test.cpp)
+target_include_directories(radio_capacity_declaration_test PRIVATE src)
+target_link_libraries(radio_capacity_declaration_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME radio_capacity_declaration_test COMMAND radio_capacity_declaration_test)
 
 add_executable(radiomodel_tnf_removal_status_test tests/radiomodel_tnf_removal_status_test.cpp)
 target_include_directories(radiomodel_tnf_removal_status_test PRIVATE src)
@@ -5000,6 +5020,7 @@ set(AETHER_SETTINGS_CONSUMERS
     firmware_close_dialog_test
     atu_seam_gate_test
     backend_capability_revision_test
+    radio_capacity_declaration_test
     tx_operation_integration_test
     tx_audio_context_test
     backend_slice_lifecycle_test
