@@ -181,6 +181,45 @@ int main(int argc, char** argv)
         check(writes.size() == before, "a default command has no authority");
     }
 
+    {
+        TxTestAuthority authority;
+        IcomStream stream;
+        std::vector<std::vector<std::uint8_t>> writes;
+        IcomStreamTestAccess::writer(stream, [&](std::span<const std::uint8_t> packet) {
+            writes.emplace_back(packet.begin(), packet.end());
+        });
+        using Command = AetherSDR::TxCoordinator::Command;
+        using Group = Command::ReplayGroup;
+        const auto packet = buildSerialData(0, 0, 0, 0, payload);
+        stream.sendTrackedTxCommand(packet, {authority.operation, true, {}, Group::Keying});
+        stream.sendTrackedTxCommand(packet, {authority.operation, false, {}, Group::Keying});
+        IcomStreamTestAccess::retransmit(stream, 0);
+        check(writes.back().size() == kHeaderSize, "key-off supersedes old retained key-on within a shared operation");
+        IcomStreamTestAccess::retransmit(stream, 1);
+        check(writes.back().size() == packet.size(), "latest key-off remains retryable");
+        stream.sendTrackedTxCommand(packet, {authority.operation, true, {}, Group::Keying});
+        IcomStreamTestAccess::retransmit(stream, 1);
+        check(writes.back().size() == kHeaderSize, "old unkey cannot replay over a newer same-operation contributor");
+
+        const auto batch = std::make_shared<std::atomic<bool>>(true);
+        const auto operation = authority.operation.withKeyingPermit([batch] { return batch->load(); });
+        stream.sendTrackedTxCommand(packet, {operation, true, {}, Group::CwText});
+        stream.sendTrackedTxCommand(packet, {operation, true, {}, Group::CwText});
+        IcomStreamTestAccess::retransmit(stream, 3);
+        check(writes.back().size() == packet.size(), "new CW chunks do not discard preceding chunks in their batch");
+        batch->store(false);
+        IcomStreamTestAccess::retransmit(stream, 4);
+        check(writes.back().size() == kHeaderSize
+                  && authority.operation.permitsDispatch(AetherSDR::TxCoordinator::monotonicMs()),
+              "CW batch cancellation fences replay while unrelated MOX keeps its operation alive");
+        stream.sendTrackedTxCommand(packet, {authority.operation, false, {}, Group::CwText});
+        stream.sendTrackedTxCommand(packet, {authority.operation, true, {}, Group::CwText});
+        IcomStreamTestAccess::retransmit(stream, 5);
+        check(writes.back().size() == kHeaderSize, "a new CW batch supersedes an old retained abort");
+        IcomStreamTestAccess::retransmit(stream, 2);
+        check(writes.back().size() == packet.size(), "CW replay changes do not erase a separate current MOX command");
+    }
+
     if (g_failures == 0)
         std::printf("icom_replay_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

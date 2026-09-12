@@ -266,6 +266,8 @@ public:
     using KeyingPermit = std::function<bool()>;
     using KeyingAdmission = std::function<KeyingPermit(KeyingIntent, bool)>;
     void setKeyingAdmission(KeyingAdmission admission) { m_keyingAdmission = std::move(admission); }
+    void requestPttOn(PttSource source, std::function<KeyingPermit()> admit,
+                      std::function<void()> engage);
 
     // A deferred release owns its original cancellation fence. A new key-on,
     // explicit stop, reset or destruction invalidates it, including on audio
@@ -273,9 +275,11 @@ public:
     struct PttRelease {
         std::function<bool()> isCurrent;
         std::function<void()> finish;
+        std::function<void()> abandoned;
         bool current() const { return isCurrent && isCurrent(); }
         void release() const { if (current() && finish) { finish(); } }
     };
+    void requestPttOff(PttSource source, PttRelease release);
     using PttOffHook = std::function<void(PttRelease)>;
     void setPttOffHook(PttOffHook hook);
     void clearPttOffHook();
@@ -452,7 +456,7 @@ private:
     bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
     void cancelPendingQuindarOff();
     void dispatchMoxOff(const PttRelease& release);
-    PttRelease capturePttRelease();
+    PttRelease capturePttRelease(PttRelease release);
 
     // PTT coordinator state (#2262)
     class ClientQuindarTone* m_quindarTone{nullptr};
@@ -464,6 +468,7 @@ private:
     bool                     m_quindarOutroInFlight{false};
     PttOffHook               m_pttOffHook;
     std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
+    std::function<void()> m_pttReleaseAbandoned;
     quint64 m_moxIntentEpoch{0};
     quint64 m_tuneIntentEpoch{0};
 

@@ -568,7 +568,7 @@ void MainWindow::activateRADE(int sliceId)
             // there is no carrier-release authority to borrow from a later TX.
             m_radeFallbackReleaseFence = std::make_shared<std::atomic<bool>>(true);
             const std::shared_ptr<std::atomic<bool>> fence = m_radeFallbackReleaseFence;
-            m_radePttRelease = {[fence] { return fence->load(std::memory_order_acquire); }, {}};
+            m_radePttRelease = {[fence] { return fence->load(std::memory_order_acquire); }, {}, {}};
             const quint64 requestId = ++m_radeEooRequestId;
             syncKiwiSdrTransmitMute();
             QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, fence, requestId]() {

@@ -4630,7 +4630,8 @@ bool IcomCivBackend::sendTunerCommandIfSupported(bool start, const TxCoordinator
         return false;
     }
     sendUserCommand(cmdSetTuner(m_session ? m_session->civAddress() : 0xA4,
-                                start ? 0x02 : 0x00), TxCoordinator::Command{operation, start, completion});
+                                start ? 0x02 : 0x00), TxCoordinator::Command{operation, start, completion,
+                                    TxCoordinator::Command::ReplayGroup::Atu});
     // sendUserCommand queues a readback after the radio has applied the write;
     // that confirmation is also what lets the transient tuning state settle.
     return true;
@@ -4977,7 +4978,8 @@ void IcomCivBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operati
     if (key && refuseKeyingInReceiveOnlyMode())
         return;
 
-    applyKeying(key, TxCoordinator::Command{operation, key, completion});
+    applyKeying(key, TxCoordinator::Command{operation, key, completion,
+        TxCoordinator::Command::ReplayGroup::Keying});
 }
 
 void IcomCivBackend::applyKeying(bool key, const std::optional<TxCoordinator::Command>& command)
@@ -5140,7 +5142,8 @@ QString IcomCivBackend::sendCwText(const QString& text, const TxCoordinator::Ope
                    std::string_view(ascii.constData(),
                                     static_cast<std::size_t>(ascii.size()))),
                "cw.message", IcomCivScheduler::Priority::Operator,
-               false, false, TxCoordinator::Command{operation, true, completion});
+               false, false, TxCoordinator::Command{operation, true, completion,
+                   TxCoordinator::Command::ReplayGroup::CwText});
     pumpCiv(nowMs());
     return {};
 }
@@ -5152,7 +5155,8 @@ void IcomCivBackend::abortCwText(const TxCoordinator::Operation& operation, cons
     }
     queueWrite(cmdAbortCwMessage(m_session->civAddress()), "cw.message",
                IcomCivScheduler::Priority::Emergency, true, true,
-               TxCoordinator::Command{operation, false, completion});
+               TxCoordinator::Command{operation, false, completion,
+                   TxCoordinator::Command::ReplayGroup::CwText});
     pumpCiv(nowMs());
 }
 

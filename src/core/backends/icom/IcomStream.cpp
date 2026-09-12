@@ -343,6 +343,28 @@ void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayloa
     }
     if (packet.size() < kHeaderSize)
         return;
+    const std::size_t replayGroup = command ? static_cast<std::size_t>(command->replayGroup) : 0;
+    const bool replaceable = replayGroup > 0 && replayGroup < m_replayCommandGeneration.size();
+    if (replaceable) {
+        ++m_replayCommandGeneration[replayGroup];
+        if (!command->keying) {
+            ++m_replayCleanupGeneration[replayGroup];
+        }
+        // FIFO delivery is unchanged. Only retained retries are superseded:
+        // replaying an old unkey after a newer key must not stop its producer,
+        // and replaying old key/text after cleanup must not restart it.
+        // CW text appends within a batch; a new chunk supersedes only a prior
+        // abort, while an abort supersedes every older chunk in that group.
+        for (ReplayPacket& retained : m_replay) {
+            if (retained.command && retained.command->replayGroup == command->replayGroup
+                && (command->replayGroup != TxCoordinator::Command::ReplayGroup::CwText
+                    || !command->keying || !retained.command->keying)) {
+                retained.superseded = true;
+            }
+        }
+    }
+    const quint64 commandGeneration = m_replayCommandGeneration[replaceable ? replayGroup : 0];
+    const quint64 cleanupGeneration = m_replayCleanupGeneration[replaceable ? replayGroup : 0];
     const quint16 seq = m_txSeq++;
     // Stamp the header sequence here rather than trusting the caller: the
     // replay buffer is keyed by it, and a caller-allocated sequence could name
@@ -352,6 +374,15 @@ void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayloa
     packet[0x07] = static_cast<std::uint8_t>((seq >> 8) & 0xff);
     sendRaw(packet);
     retain(seq, packet, context, command);
+    if (replaceable) {
+        // An injected terminal writer (or nested loop) may have delivered a
+        // newer command before this older write returned and was retained.
+        const bool cwAppend = command->replayGroup == TxCoordinator::Command::ReplayGroup::CwText
+            && command->keying;
+        m_replay[seq].superseded = cwAppend
+            ? cleanupGeneration != m_replayCleanupGeneration[replayGroup]
+            : commandGeneration != m_replayCommandGeneration[replayGroup];
+    }
     // Only PAYLOAD resets the quiet clock. Letting the keepalive reset it would
     // make the stream permanently believe it had just sent something real, so
     // the relaxation to a 1 s cadence would never engage.
@@ -493,10 +524,10 @@ void IcomStream::handleRetransmitRequest(std::span<const std::uint8_t> pkt)
             if (it != m_replay.end() && it->context) {
                 dispatch = it->context->beginDispatch(TxCoordinator::monotonicMs());
             }
-            if (it != m_replay.end() && it->command) {
+            if (it != m_replay.end() && !it->superseded && it->command) {
                 commandDispatch = it->command->beginDispatch(TxCoordinator::monotonicMs());
             }
-            if (it != m_replay.end() && (!it->context || dispatch)
+            if (it != m_replay.end() && !it->superseded && (!it->context || dispatch)
                 && (!it->command || commandDispatch)) {
                 sendRaw(it->bytes);
                 ++m_counters.retransmitsServed;

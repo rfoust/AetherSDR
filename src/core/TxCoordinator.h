@@ -20,11 +20,13 @@ class TxCoordinator final {
     struct OperationState;
     struct IntentState;
     struct ProducerState;
+    struct RequestState;
 
 public:
     enum class Activity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
     class Operation;
     class Context;
+    class Request;
     // A producer is a trusted in-process lifetime, not a client-supplied ID
     // or an independent TX actor. Copies cannot renew an invalidated lifetime.
     class Producer {
@@ -32,6 +34,9 @@ public:
         [[nodiscard]] bool valid() const;
         [[nodiscard]] bool sameProducer(const Producer& other) const;
         void invalidate() const; // atomic; callable by the producer's destructor
+        // Capture at the input boundary, before any queued hop. This does not
+        // admit TX; only the owner can bind it to an already admitted operation.
+        [[nodiscard]] Request request() const;
     private:
         friend class TxCoordinator;
         friend class Context;
@@ -76,10 +81,22 @@ public:
         // operation, connection reset, or coordinator destruction.
         [[nodiscard]] bool permitsCleanup() const;
         [[nodiscard]] bool sameOperation(const Operation& other) const;
+        [[nodiscard]] bool sameAuthority(const Operation& other) const;
+        // Restrict an existing grant with a producer's immutable cancellation
+        // predicate. The trusted caller captures only worker-safe state; the
+        // predicate cannot authorize a command or extend the operation.
+        [[nodiscard]] Operation withKeyingPermit(std::function<bool()> permit) const;
+        // For a backend's already accepted MOX latch only, never initial
+        // queued-command admission or audio. Compatible MOX/CW-PTT holds
+        // sustain the latch; the last live producer disappearing clears it.
+        [[nodiscard]] Operation heldKeying() const;
         [[nodiscard]] Dispatch beginDispatch(qint64 monotonicMs, bool keying = true) const;
     private:
         friend class TxCoordinator;
         std::shared_ptr<OperationState> m_state;
+        std::shared_ptr<ProducerState> m_producer;
+        std::shared_ptr<IntentState> m_intent;
+        std::shared_ptr<const std::function<bool()>> m_keyingPermit;
     };
 
     // Local queue bookkeeping, never radio-idle evidence. Every copy shares a
@@ -110,9 +127,11 @@ public:
     // A typed command carries its original operation across scheduling and
     // replay. Cleanup may outlive normal completion but never a new operation.
     struct Command {
+        enum class ReplayGroup { None, Keying, Atu, CwText };
         Operation operation;
         bool keying{true};
         Completion completion{};
+        ReplayGroup replayGroup{ReplayGroup::None};
         [[nodiscard]] bool permitsDispatch(qint64 now) const
         {
             return keying ? operation.permitsDispatch(now) : operation.permitsCleanup();
@@ -135,6 +154,18 @@ public:
     private:
         friend class TxCoordinator;
         std::shared_ptr<IntentState> m_state;
+    };
+
+    // One explicit producer request, including a queued on/off pair. It binds
+    // once: neither an old callback nor a reconnect can adopt a new operation.
+    class Request {
+    public:
+        [[nodiscard]] bool valid() const;
+        [[nodiscard]] bool sameRequest(const Request& other) const;
+    private:
+        friend class TxCoordinator;
+        friend class Producer;
+        std::shared_ptr<RequestState> m_state;
     };
 
     // Immutable provenance for a queued audio block. Continuous microphone
@@ -172,6 +203,7 @@ public:
     static constexpr int kMaximumActors = 64;
     static constexpr int kMaximumIntents = 256;
     static constexpr int kMaximumProducers = 256;
+    static constexpr int kMaximumRequests = 256;
 
     explicit TxCoordinator(StopHandler stopHandler);
     [[nodiscard]] static qint64 monotonicMs();
@@ -182,6 +214,15 @@ public:
     [[nodiscard]] Actor registerActor(ActorPolicy policy);
     [[nodiscard]] Producer registerProducer(bool continuousMicrophone = false);
     [[nodiscard]] Context mediaContext(const Producer& producer, const Operation& operation = {}) const;
+    [[nodiscard]] bool acceptsRequest(const Request& request) const;
+    [[nodiscard]] Intent beginRequest(const Request& request, const Operation& operation, Activity activity);
+    [[nodiscard]] Intent requestIntent(const Request& request) const;
+    [[nodiscard]] Operation requestOperation(const Request& request) const;
+    [[nodiscard]] Context mediaContext(const Request& request) const;
+    // Close admission immediately, including for an off received before its
+    // queued on. The original intent stays alive for its normal queued tail.
+    [[nodiscard]] Intent closeRequest(const Request& request);
+    [[nodiscard]] bool hasOtherIntents(const Operation& operation, const Intent& excluded) const;
     [[nodiscard]] Admission acquire(const Actor& actor, qint64 monotonicMs);
     // Repeated admission by the same producer reuses its live handle; it does
     // not accumulate reference-counted holds. Distinct producers use distinct
@@ -236,6 +277,7 @@ private:
         // unlike operation admission, must account for these writes too.
         std::atomic<quint64> continuousDispatches{0};
         std::atomic<bool> alive{true};
+        std::atomic<int> requests{0};
     };
     struct ActorState {
         std::weak_ptr<Identity> coordinator;
@@ -253,18 +295,36 @@ private:
         qint64 startedMs{0};
         qint64 maximumMs{0};
         quint64 generation{0};
+        // Immutable bounded snapshot, published by the owner. Weak entries
+        // avoid an operation/intent ownership cycle. Read only by TX workers.
+        std::shared_ptr<const std::vector<std::weak_ptr<IntentState>>> holds;
     };
     struct IntentState {
         Operation operation;
+        std::shared_ptr<ProducerState> producer;
         Activity activity{Activity::Mox};
         std::atomic<bool> ended{false};
         bool finishing{false}; // owner-thread only; not the worker dispatch fence
+    };
+    struct RequestState {
+        ~RequestState() { identity->requests.fetch_sub(1, std::memory_order_release); }
+        std::shared_ptr<Identity> identity;
+        Producer producer;
+        quint64 session{0};
+        std::atomic<bool> closed{false};
+        // Published once by the owner, then immutable. Readers acquire bound
+        // before copying intent; no mutex/atomic-shared_ptr is needed on the
+        // input worker, and no toolchain-specific specialization is required.
+        std::shared_ptr<IntentState> intent;
+        std::atomic<bool> bound{false};
     };
 
     [[nodiscard]] bool onThread() const;
     [[nodiscard]] bool validActor(const Actor& actor) const;
     void stop(StopReason reason);
     void endIntents(const Operation& operation);
+    [[nodiscard]] Intent beginIntent(const Operation& operation, const Intent& previous,
+                                      Activity activity, const std::shared_ptr<ProducerState>& producer);
 
     QThread* const m_thread;
     std::shared_ptr<Identity> m_identity;

@@ -11,6 +11,7 @@
 #include <span>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <vector>
 
 #include "core/backends/hl2/MetisProtocol.h"
@@ -409,6 +410,7 @@ private:
     // radio in that order, and neither should wait up to three frames for the
     // rotation to come back around.
     friend struct MetisClientTestAccess; // socket-free transport-state injection
+    std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> m_packetSinkForTest;
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // Last transmit frequency handed to the IO board, and whether one ever was.
     // A separate flag rather than a 0 sentinel: 0 Hz is not a plausible tuned

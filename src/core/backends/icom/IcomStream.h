@@ -11,6 +11,7 @@
 #include <QObject>
 
 #include <cstdint>
+#include <array>
 #include <span>
 #include <vector>
 #include <optional>
@@ -209,8 +210,11 @@ private:
         std::vector<std::uint8_t> bytes;
         std::optional<TxCoordinator::Context> context;
         std::optional<TxCoordinator::Command> command;
+        bool superseded{false};
     };
     QMap<quint16, ReplayPacket> m_replay;
+    std::array<quint64, 4> m_replayCommandGeneration{};
+    std::array<quint64, 4> m_replayCleanupGeneration{};
     // Insertion order for m_replay, because the map is keyed by SEQUENCE and
     // the sequence space wraps. Evicting the map's lowest key drops the newest
     // packets once the counter rolls past 0xFFFF — see retain().

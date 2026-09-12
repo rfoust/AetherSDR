@@ -40,10 +40,10 @@ also invalidates queued cleanup, including when a transport object survives.
 An idle cleanup fence can permit key-up delivery but cannot acquire, complete
 or acknowledge an owned operation.
 
-`RadioModel` registers one **transitional desktop compatibility actor**. Existing
-desktop, CAT, TCI, MIDI, keyer and bridge calls still share their existing entry
-points. This does not establish individual client identity. `PttSource` remains
-display/preflight metadata, never the owner or a permission grant.
+`RadioModel` registers one **transitional desktop compatibility actor**. Producer
+lifetimes and individual contribution handles are distinct within that actor;
+they are not independent TX grants or permission to hand off after a local tail.
+`PttSource` remains display/preflight metadata, never identity or a permission grant.
 
 ## Primary paths
 
@@ -69,12 +69,38 @@ these handles. The derived activity mask is only a compatibility view for
 existing interlocks/cleanup, not release authority. The historical operation
 activity mask still records which radio-buffered paths might need cleanup.
 
-This increment keeps one compatibility slot per existing activity entry point.
-It does not yet assign separate CAT/TCI/bridge/keyer clients to slots, change
-which activities may overlap, or carry intent fences through every terminal
-writer and audio queue. Those conversions must retain handles at the actual
-producer boundary, not infer identity from activity type or a display string.
+The compatibility slots remain for not-yet-converted local activity entry
+points. CAT PTT and TCI now retain separate accepted-session producer handles.
+Serial/PTY CAT uses its configured endpoint lifetime, not a guessed process ID.
+AX.25 and WSPR retain their controller lifetime and a request for each scheduled
+transmission. Bridge authorization-lifetime and other local-keyer conversions
+remain separate work; a short-lived MCP request socket is not a TX producer.
 Normal tail consumption remains local bookkeeping, never radio-stop proof.
+
+`Producer::request()` captures a bounded request cell and connection generation
+at input, before queued admission. The engine binds it once to an original
+operation and intent. Closing an unbound request prevents a delayed route
+callback from keying. An admitted normal release keeps its media/command permit
+through its queued tail; consumption ends that intent exactly once. Release
+and teardown of one compatible contributor cannot unkey another. Quindar/RADE
+reengagement retires the superseded release's intent, without truncating the
+new contribution or allowing the old release callback to target it.
+
+The Metis MOX latch checks the original request before accepting a queued key
+command. Its subsequent periodic packets sustain only while an admitted
+compatible MOX/CW-PTT contribution is live. This bounded, immutable snapshot is
+published by the coordinator; workers consult atomic producer/intent validity,
+not mutable models. Thus the most recently admitted client leaving does not
+unkey a remaining contributor, but the last producer's death fences the latch
+even before its queued cleanup arrives. This sustain permit is never used to
+admit a queued key command or ordinary TX audio.
+
+Icom scheduling and retained retries preserve original command and audio
+authority. A cancelled CW batch cannot borrow a still-held MOX operation.
+Retained keying/ATU state is superseded by a newer command in the same typed
+group; CW chunks append, while abort and a subsequent batch supersede each
+other's stale retries. Original FIFO delivery is unchanged. Invalid retries
+become sequence-preserving protocol Idle packets, not old key-on/unkey/audio.
 
 | Intent | Engine route |
 | --- | --- |

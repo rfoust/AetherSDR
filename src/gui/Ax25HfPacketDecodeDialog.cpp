@@ -2238,6 +2238,14 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     // Identifies this transmission to any deferred work armed on its behalf
     // (see armTxStreamWaitTimeout).
     ++m_txGeneration;
+    if (m_radio && !m_txProducer.valid()) {
+        m_txProducer = m_radio->registerTxProducer(this);
+    }
+    m_txRequest = m_txProducer.request();
+    if (!m_txRequest.valid()) {
+        finishTransmit(true, QStringLiteral("transmit producer is unavailable"));
+        return;
+    }
     m_txFromKiss = fromKiss;
     if (!fromKiss) { m_txFromDigi = false; }
     m_pendingTx = tx;
@@ -2448,9 +2456,10 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
             .arg(m_txTailMs);
 
     refreshTransmitControls();
-    QTimer::singleShot(kTxDaxSettleMs, this, [this] {
-        if (!m_txActive)
+    QTimer::singleShot(kTxDaxSettleMs, this, [this, request = m_txRequest] {
+        if (!m_txActive || !request.sameRequest(m_txRequest)) {
             return;
+        }
         if (!m_radio) {
             finishTransmit(true, QStringLiteral("radio model disappeared before PTT"));
             return;
@@ -2489,11 +2498,11 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         }
 
         m_txPttClock.restart();
-        txModel.requestPttOn(TransmitModel::PttSource::Dax);
-        if (!m_txProducer.valid()) {
-            m_txProducer = m_radio->registerTxProducer(this);
+        if (!m_radio->requestProducerPttOn(request, TransmitModel::PttSource::Dax)) {
+            finishTransmit(true, QStringLiteral("PTT request was refused"));
+            return;
         }
-        m_txContext = m_radio->captureTxMedia(m_txProducer);
+        m_txContext = m_radio->captureTxMedia(request);
         if (!m_txActive)
             return;
         if (waitsForRadioPtt) {
@@ -2727,11 +2736,15 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
 
     if (m_radio) {
         auto& txModel = m_radio->transmitModel();
-        if (txModel.isTransmitting())
-            txModel.requestPttOff(TransmitModel::PttSource::Dax);
+        if (aborted) {
+            m_radio->abortProducerPtt(m_txRequest, TransmitModel::PttSource::Dax);
+        } else {
+            m_radio->requestProducerPttOff(m_txRequest, TransmitModel::PttSource::Dax);
+        }
         if (m_txRestoreTransmitDax)
             txModel.setDax(m_txPreviousTransmitDax);
     }
+    m_txRequest = {};
     if (m_audio) {
         if (m_txRestoreAudioDaxMode)
             m_audio->setDaxTxMode(m_txPreviousAudioDaxMode);

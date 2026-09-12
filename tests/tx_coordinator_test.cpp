@@ -560,6 +560,79 @@ void producerMediaContexts()
     registrations.front().invalidate();
     check(coordinator.registerProducer().valid(), "invalidated producer slots can be reclaimed");
 }
+void capturedProducerRequests()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    TxCoordinator foreign([](const auto&, auto) {});
+    const auto actor = coordinator.registerActor({true, 0});
+    const auto first = coordinator.registerProducer();
+    const auto second = coordinator.registerProducer();
+    const auto a = first.request();
+    const auto b = second.request();
+    const auto operation = coordinator.acquire(actor, TxCoordinator::monotonicMs()).operation;
+    const auto aIntent = coordinator.beginRequest(a, operation, TxCoordinator::Activity::Mox);
+    const auto bIntent = coordinator.beginRequest(b, operation, TxCoordinator::Activity::Mox);
+    const auto aOperation = coordinator.requestOperation(a);
+    const auto bOperation = coordinator.requestOperation(b);
+    const auto aMedia = coordinator.mediaContext(a);
+    check(aIntent.pending() && bIntent.pending()
+              && coordinator.beginRequest(a, operation, TxCoordinator::Activity::Mox).sameIntent(aIntent),
+          "each captured request binds exactly once; repeated on reuses only its own intent");
+    check(aOperation.sameOperation(bOperation) && !aOperation.sameAuthority(bOperation),
+          "compatible producer authority is distinct under the same desktop operation");
+    check(!foreign.acceptsRequest(a) && !foreign.requestIntent(a).pending(),
+          "requests cannot cross coordinator identities");
+    check(coordinator.closeRequest(a).sameIntent(aIntent) && !a.valid()
+              && !coordinator.beginRequest(a, operation, TxCoordinator::Activity::Mox).pending()
+              && aOperation.permitsDispatch(TxCoordinator::monotonicMs()),
+          "normal release closes new admission while retaining its original queued tail");
+    check(coordinator.hasOtherIntents(operation, aIntent) && coordinator.endIntent(aIntent)
+              && !aOperation.permitsDispatch(TxCoordinator::monotonicMs())
+              && !aMedia.permitsDispatch(TxCoordinator::monotonicMs())
+              && bOperation.permitsDispatch(TxCoordinator::monotonicMs()),
+          "one producer's consumed release fences its own commands and media only");
+    const auto fresh = first.request();
+    const auto freshIntent = coordinator.beginRequest(fresh, operation, TxCoordinator::Activity::Mox);
+    check(freshIntent.pending() && !aMedia.sameContext(coordinator.mediaContext(fresh)),
+          "fresh request from the same producer cannot inherit a partial media buffer");
+    first.invalidate();
+    check(!coordinator.requestOperation(fresh).permitsDispatch(TxCoordinator::monotonicMs())
+              && bOperation.permitsDispatch(TxCoordinator::monotonicMs())
+              && coordinator.closeRequest(fresh).sameIntent(freshIntent),
+          "producer destruction fences key-on immediately but permits cleanup of its admitted intent");
+    (void)coordinator.endIntent(freshIntent);
+    const auto beforeReset = second.request();
+    const auto reversed = second.request();
+    (void)coordinator.closeRequest(reversed);
+    check(!coordinator.beginRequest(reversed, operation, TxCoordinator::Activity::Mox).pending(),
+          "an off consumed before its queued on cannot later acquire transmit");
+    coordinator.reset();
+    check(!beforeReset.valid() && !b.valid() && coordinator.acknowledgeStopped(operation),
+          "connection reset fences both admitted and not-yet-admitted input requests");
+    const auto next = coordinator.acquire(actor, TxCoordinator::monotonicMs()).operation;
+    check(!coordinator.beginRequest(beforeReset, next, TxCoordinator::Activity::Mox).pending(),
+          "a queued prior-session request never adopts the new connection's operation");
+    TxCoordinator::Request workerRequest;
+    bool workerCannotAdmit = false;
+    std::unique_ptr<QThread> worker(QThread::create([&] {
+        workerRequest = second.request();
+        workerCannotAdmit = !coordinator.beginRequest(workerRequest, next, TxCoordinator::Activity::Mox).pending();
+    }));
+    worker->start();
+    worker->wait();
+    check(workerCannotAdmit && coordinator.beginRequest(workerRequest, next, TxCoordinator::Activity::Mox).pending(),
+          "worker may capture input identity, but admission remains on the engine owner thread");
+    TxCoordinator bounded([](const auto&, auto) {});
+    const auto boundedProducer = bounded.registerProducer();
+    std::vector<TxCoordinator::Request> requests;
+    for (int i = 0; i < TxCoordinator::kMaximumRequests; ++i) {
+        requests.push_back(boundedProducer.request());
+    }
+    check(requests.back().valid() && !boundedProducer.request().valid(),
+          "pending input request handles have a coordinator-wide bound");
+    requests.pop_back();
+    check(boundedProducer.request().valid(), "request capacity is reclaimed after its final queued copy dies");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -578,5 +651,6 @@ int main(int argc, char** argv)
     terminalDispatchBarrier();
     intentBoundaries();
     producerMediaContexts();
+    capturedProducerRequests();
     return failures ? 1 : 0;
 }

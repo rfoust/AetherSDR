@@ -1635,6 +1635,15 @@ void PskReporterMapDialog::scheduleBeacon()
         return;
     }
 
+    if (!m_beaconProducer.valid()) {
+        m_beaconProducer = m_radioModel->registerTxProducer(this);
+    }
+    m_beaconRequest = m_beaconProducer.request();
+    if (!m_beaconRequest.valid()) {
+        stopBeacon(tr("Transmit request was blocked"));
+        return;
+    }
+
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     m_beaconSlotMs = ((nowMs / kBeaconSlotMs) + 1) * kBeaconSlotMs;
     m_beaconDeferrals = 0;
@@ -1670,11 +1679,14 @@ void PskReporterMapDialog::stopBeacon(const QString& status, BeaconStopOutcome o
     m_beaconStopDeadlineMs = 0;
     m_beaconDeferrals = 0;
     m_beaconDeferReason.clear();
-    if (ownedTransmit && m_radioModel != nullptr
-        && m_radioModel->transmitModel().isTransmitting()) {
-        m_radioModel->transmitModel().requestPttOff(
-            TransmitModel::PttSource::Wspr);
+    if (m_radioModel != nullptr) {
+        if (ownedTransmit) {
+            m_radioModel->requestProducerPttOff(m_beaconRequest, TransmitModel::PttSource::Wspr);
+        } else {
+            m_radioModel->abortProducerPtt(m_beaconRequest, TransmitModel::PttSource::Wspr);
+        }
     }
+    m_beaconRequest = {};
     if (m_radioModel != nullptr) {
         m_radioModel->releaseWsprTransmit();
     }
@@ -1850,17 +1862,12 @@ void PskReporterMapDialog::updateBeaconState()
                   static_cast<float>(m_beaconLevel->value()),
                   preRollFrames, skipFrames);
     m_beaconStopDeadlineMs = QDateTime::currentMSecsSinceEpoch() + 115000;
-    TransmitModel& tx = m_radioModel->transmitModel();
-    tx.requestPttOn(TransmitModel::PttSource::Wspr);
-    if (!tx.isTransmitting()) {
+    if (!m_radioModel->requestProducerPttOn(m_beaconRequest, TransmitModel::PttSource::Wspr)) {
         beacon->stop();
         stopBeacon(tr("Transmit request was blocked"));
         return;
     }
-    if (!m_beaconProducer.valid()) {
-        m_beaconProducer = m_radioModel->registerTxProducer(this);
-    }
-    m_beaconContext = m_radioModel->captureTxMedia(m_beaconProducer);
+    m_beaconContext = m_radioModel->captureTxMedia(m_beaconRequest);
     QMetaObject::invokeMethod(m_audioEngine, [audio = m_audioEngine, context = m_beaconContext] {
         audio->startWsprPump(context);
     }, Qt::QueuedConnection);

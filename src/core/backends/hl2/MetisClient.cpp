@@ -621,7 +621,7 @@ void MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
         return;
     }
     m_mox = keyed;
-    m_moxOperation = operation;
+    m_moxOperation = keyed ? operation.heldKeying() : operation;
 }
 
 void MetisClient::setTxFrequencyHz(std::uint32_t hz)
@@ -829,8 +829,9 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
 
 void MetisClient::sendControlPacket()
 {
-    if (!m_socket)
+    if (!m_socket && !m_packetSinkForTest) {
         return;
+    }
     // Sub-frame 0 always carries the config bank (sample rate + receiver count)
     // so the DDC configuration is re-asserted on every frame; sub-frame 1
     // alternates the remaining banks. Matches the reference client, which pairs a
@@ -853,7 +854,9 @@ void MetisClient::sendControlPacket()
             m_txIq.clear();
         }
     }
-    countTx(sendTo(*m_socket, buildNextControlPacket(), m_host, m_port));
+    const auto packet = buildNextControlPacket();
+    countTx(m_packetSinkForTest ? m_packetSinkForTest(packet)
+                               : sendTo(*m_socket, packet, m_host, m_port));
 }
 
 void MetisClient::countTx(qint64 bytesWritten) noexcept

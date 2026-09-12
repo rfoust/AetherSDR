@@ -2562,7 +2562,9 @@ RadioModel::RadioModel(QObject* parent)
             return false;
         }
         Q_UNUSED(wpm);
-        const QString rejection = m_backend->sendCwText(text, m_txOperation, trackTxQueue(m_txOperation));
+        const TxCoordinator::Operation operation = m_txOperation.withKeyingPermit(
+            m_cwxModel.queuedTransmissionPermit());
+        const QString rejection = m_backend->sendCwText(text, operation, trackTxQueue(operation));
         if (!rejection.isEmpty()) {
             emit radioMessageReceived(
                 tr("CW text not sent: %1").arg(rejection),
@@ -4630,7 +4632,46 @@ bool RadioModel::forwardNonFlexCwKeying(bool down)
 
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 {
-    const TxCoordinator::Operation cleanup = tx ? TxCoordinator::Operation{} : m_txCoordinator.cleanupFence();
+    (void)setTransmitImpl(tx, source, nullptr);
+}
+
+bool RadioModel::setProducerTransmit(const TxCoordinator::Request& request, bool tx,
+                                     TransmitModel::PttSource source)
+{
+    const bool accepted = setTransmitImpl(tx, source, &request);
+    if (tx && !accepted) {
+        // Synchronous notifications may refuse after admission. Retire the
+        // original request too, not only its optimistic state. A retry needs
+        // a fresh input request; no stranded hold may acquire later work.
+        (void)setTransmitImpl(false, source, &request);
+    }
+    return accepted;
+}
+
+bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
+                                const TxCoordinator::Request* request, bool alreadyClosing)
+{
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    TxCoordinator::Intent intent;
+    if (request && !tx) {
+        intent = alreadyClosing ? m_txCoordinator.requestIntent(*request)
+                                : m_txCoordinator.closeRequest(*request);
+        if (!intent.pending()) {
+            return false; // duplicate, unadmitted, or a previous connection
+        }
+        const TxCoordinator::Operation original = m_txCoordinator.requestOperation(*request);
+        if (m_txCoordinator.hasOtherIntents(original, intent)) {
+            // Compatible desktop contributors still share one actor. A
+            // client's release ends only its contribution, never another's.
+            endLocalTxActivity(intent);
+            m_txRequested = activeTxActivities() & static_cast<unsigned>(TxActivity::Mox);
+            return true;
+        }
+    }
+    const TxCoordinator::Operation cleanup = tx ? TxCoordinator::Operation{}
+        : request ? m_txCoordinator.requestOperation(*request) : m_txCoordinator.cleanupFence();
     if (tx) {
         // F2 (#4448): refuse keying on a backend that cannot transmit. The
         // guard is a capability test, not a family test — HL2 is TX-capable
@@ -4645,12 +4686,13 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
             refuseKeyWithInterlock(
                 tr("This radio is receive-only and cannot transmit."),
                 QStringLiteral("rx-only-tx"));
-            return;
+            return false;
         }
         // ...and the mode the TX slice is actually in. Same rule, same
         // rollback; see refuseKeyInReceiveOnlyMode().
-        if (!refuseKeyInReceiveOnlyMode())
-            return;
+        if (!refuseKeyInReceiveOnlyMode()) {
+            return false;
+        }
         const QString message = localPttInterlockMessage(source);
         if (!message.isEmpty()) {
             const QString panId = txSlice() ? txSlice()->panId() : QString();
@@ -4659,10 +4701,10 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
                 QStringLiteral("local-ptt:%1:%2").arg(panId, message),
                 panId);
             m_transmitModel.setTransmitting(false);
-            return;
+            return false;
         }
-        if (!beginLocalTxActivity(TxActivity::Mox)) {
-            return;
+        if (!beginTxActivity(TxActivity::Mox, request)) {
+            return false;
         }
         m_transmitModel.invalidatePttRelease();
         armInterlockNotification(source);
@@ -4674,14 +4716,18 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     // Track local intent so we can keep TX gating aligned with user/PTT edges
     // while radio interlock transitions through intermediate states.
     m_txRequested = tx;
-    const TxCoordinator::Operation operation = m_txOperation;
-    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Mox);
-    if (!tx) {
+    const TxCoordinator::Operation operation = request
+        ? m_txCoordinator.requestOperation(*request) : m_txOperation;
+    if (!request) {
+        intent = m_localTxIntents.value(TxActivity::Mox);
+    }
+    if (!tx && !request) {
         (void)m_txCoordinator.requestIntentEnd(intent);
     }
     const QPointer<RadioModel> receiver(this);
-    const auto finishIntent = qScopeGuard([receiver, intent, tx] {
-        if (!tx && receiver) {
+    bool releaseQueued = false;
+    const auto finishIntent = qScopeGuard([receiver, intent, tx, &releaseQueued] {
+        if (!tx && receiver && !releaseQueued) {
             receiver->endLocalTxActivity(intent);
         }
     });
@@ -4692,7 +4738,7 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     // - TX off: stop immediately to avoid "stuck TX tail" during UNKEY_REQUESTED.
     m_transmitModel.setTransmitting(tx);
     if (commandEpoch != m_txCommandEpoch) {
-        return;
+        return false;
     }
     if (!tx && m_txAudioGate) {
         m_txAudioGate = false;
@@ -4720,14 +4766,28 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     // the generic command sink cannot bypass this admission.
     if (commandEpoch != m_txCommandEpoch
         || (tx ? !operation.permitsDispatch(txMonotonicMs()) : !cleanup.permitsCleanup())) {
-        return;
+        return false;
     }
-    if (m_backend)
-        m_backend->setKeying(tx, tx ? operation : cleanup, trackTxQueue(operation));
+    if (m_backend) {
+        if (request && !tx) {
+            // A short queued on/off retains this producer's authority until
+            // its own unkey has been consumed, even while another activity
+            // keeps the shared operation alive. This is not RF-idle proof.
+            releaseQueued = true;
+            m_backend->setKeying(false, cleanup, trackTxQueue(operation, [receiver, intent] {
+                if (receiver) {
+                    receiver->endLocalTxActivity(intent);
+                }
+            }));
+        } else {
+            m_backend->setKeying(tx, tx ? operation : cleanup, trackTxQueue(operation));
+        }
+    }
 
     if (commandEpoch == m_txCommandEpoch) {
         publishCommandedBackendTransmitEdge(tx);
     }
+    return true;
 }
 
 void RadioModel::publishCommandedBackendTransmitEdge(bool tx)

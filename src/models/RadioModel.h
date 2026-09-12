@@ -837,7 +837,15 @@ public:
     TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
     // Trusted composition only. A producer is a lifetime, not an actor grant.
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
+    // Plain engine protocol objects invalidate this handle in their destructor.
+    TxCoordinator::Producer registerTxProducer();
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
+    TxCoordinator::Context captureTxMedia(const TxCoordinator::Request& request) const;
+    bool setProducerTransmit(const TxCoordinator::Request& request, bool tx,
+                             TransmitModel::PttSource source = TransmitModel::PttSource::Dax);
+    bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    void requestProducerPttOff(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    void abortProducerPtt(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     // Best-effort stop of this captured compatibility operation only. This is
     // not a cancellation/recovery acknowledgment or proof that RF has stopped.
     void requestTransmitStop(const TxCoordinator::Operation& operation);
@@ -1795,13 +1803,17 @@ private:
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
+    bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
+    bool setTransmitImpl(bool tx, TransmitModel::PttSource source,
+                         const TxCoordinator::Request* request, bool alreadyClosing = false);
     void endLocalTxActivity(const TxCoordinator::Intent& intent);
     unsigned activeTxActivities() const;
     void completeLocalTxIfDrained();
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
-    TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation);
+    TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
+                                           std::function<void()> finished = {});
     void sendCwxCommand(const QString& command, bool keying, ResponseCallback reply = {});
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();

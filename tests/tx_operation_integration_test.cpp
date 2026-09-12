@@ -7,6 +7,12 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/ClientQuindarTone.h"
 #include "core/PanadapterStream.h"
+#include "core/RigctlProtocol.h"
+#include "core/SmartCatProtocol.h"
+#include "core/TciServer.h"
+#ifdef HAVE_WEBSOCKETS
+#include <QWebSocket>
+#endif
 
 #include <QCoreApplication>
 #include <QEvent>
@@ -22,6 +28,30 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class TxOperationIntegrationTestAccess {
 public:
+#ifdef HAVE_WEBSOCKETS
+    static void addTciClient(TciServer& server, QWebSocket& socket, RadioModel& radio)
+    {
+        TciServer::ClientState client;
+        client.socket = &socket;
+        client.txProducer = radio.registerTxProducer(&socket);
+        server.m_clients.append(std::move(client));
+    }
+    static void tciRequest(TciServer& server, QWebSocket& socket, bool on)
+    {
+        server.handleTrxRequest(&socket, {0, on, QStringLiteral("tci")});
+    }
+    static void deferTciRoute(TciServer& server) { server.m_routeTransitionInFlight = true; }
+    static void drainTciRoute(TciServer& server)
+    {
+        server.m_routeTransitionInFlight = false;
+        server.drainDeferredRoutingAndPtt();
+    }
+    static void disconnectTciClient(TciServer& server, QWebSocket& socket)
+    {
+        server.clientStateFor(&socket)->txProducer.invalidate();
+        server.abortTciPtt();
+    }
+#endif
     static void transmitDelta(RadioModel& radio, const TransmitDelta& delta)
     {
         radio.applyBackendTransmitDelta(delta);
@@ -90,6 +120,7 @@ public:
     Writer keyingWriter;
     Writer tuneWriter;
     Writer atuWriter;
+    std::function<void(const TxCoordinator::Operation&)> cwTextWriter;
     QStringList* commands;
     explicit RecordingBackend(QStringList& record) : commands(&record)
     {
@@ -128,7 +159,15 @@ public:
         }
     }
     void setCwKeying(bool on, bool, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { *commands << (on ? "cw:on" : "cw:off"); }
-    QString sendCwText(const QString& text, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override { *commands << "cwx:" + text; return cwRejection; }
+    QString sendCwText(const QString& text, const TxCoordinator::Operation& operation,
+                       const TxCoordinator::Completion&) override
+    {
+        *commands << "cwx:" + text;
+        if (cwTextWriter) {
+            cwTextWriter(operation);
+        }
+        return cwRejection;
+    }
     void abortCwText(const TxCoordinator::Operation&, const TxCoordinator::Completion&) override { *commands << "cwx:abort"; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
@@ -675,6 +714,22 @@ void cwxCancellationFence()
 
 void queuedCwxCancellation()
 {
+    {
+        Fixture f;
+        TxCoordinator::Operation queued;
+        f.backend->cwTextWriter = [&queued](const TxCoordinator::Operation& operation) {
+            queued = operation;
+        };
+        f.radio.setTransmit(true);
+        const TxCoordinator::Operation mox = f.radio.transmitOperation();
+        f.radio.cwxModel().send("OLD");
+        check(queued.permitsDispatch(TxCoordinator::monotonicMs()),
+              "typed CW sender retains the original batch during queue handoff");
+        f.radio.cwxModel().clearBuffer();
+        check(!queued.permitsDispatch(TxCoordinator::monotonicMs())
+                  && mox.permitsDispatch(TxCoordinator::monotonicMs()),
+              "typed backend CW cancellation is independent of a held MOX operation");
+    }
     for (int scenario = 0; scenario != 3; ++scenario) {
         QStringList tcp;
         RadioConnection connection;
@@ -1056,6 +1111,159 @@ void testInjectionReopensAdmission()
               "rebuildBackendForTest reopens admission like setBackendForTest");
     }
 }
+void protocolProducerLifetimes()
+{
+    const auto drain = [] {
+        // All transports are injected on this thread. Drain the real queued
+        // hops (input -> engine -> writer -> completion), not a fake peer.
+        for (int i = 0; i != 6; ++i) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        }
+    };
+    QStringList wire;
+    RadioConnection connection;
+    FlexBackend encoder;
+    Fixture f;
+    TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, wire);
+    TxOperationIntegrationTestAccess::bindTxEncoder(f.radio, encoder);
+    f.backend->keyingWriter = [&encoder](bool on, const auto& operation, const auto& completion) {
+        encoder.setKeying(on, operation, completion);
+    };
+    {
+        RigctlProtocol abandoned(&f.radio);
+        check(abandoned.handleLine("T 1") == "RPRT 0\n", "rigctl accepts a syntactically valid queued PTT request");
+    }
+    drain();
+    check(wire.isEmpty(), "destroying the accepted CAT session fences its not-yet-admitted key-on");
+    {
+        SmartCatProtocol disconnected(&f.radio);
+        (void)disconnected.processCommand("TX");
+        disconnected.releasePtt();
+        drain();
+        check(!wire.contains("xmit 1"), "SmartCAT disconnect fences queued key-on before protocol destruction");
+        wire.clear();
+    }
+    {
+        RigctlProtocol first(&f.radio);
+        RigctlProtocol second(&f.radio);
+        (void)first.handleLine("T 1");
+        (void)second.handleLine("T 1");
+        drain();
+        const auto operation = f.radio.transmitOperation();
+        wire.clear();
+        (void)first.handleLine("T 0");
+        drain();
+        check(wire.isEmpty() && operation.permitsDispatch(TxCoordinator::monotonicMs()),
+              "one rigctl client's release leaves another client's contribution active");
+        (void)first.handleLine("T 0");
+        drain();
+        check(wire.isEmpty(), "duplicate rigctl release cannot unkey another client");
+        (void)second.handleLine("T 0");
+        drain();
+        check(wire == QStringList{"xmit 0"} && !operation.permitsDispatch(TxCoordinator::monotonicMs()),
+              "last rigctl contribution releases once and completes after terminal delivery");
+        wire.clear();
+        (void)first.handleLine("T 1");
+        (void)first.handleLine("T 0");
+        drain();
+        check(wire == QStringList({"xmit 1", "xmit 0"}),
+              "producer-scoped short rigctl on/off retains both normal queued edges");
+    }
+    drain();
+    wire.clear();
+    {
+        SmartCatProtocol remaining(&f.radio);
+        {
+            SmartCatProtocol departing(&f.radio);
+            (void)departing.processCommand("TX");
+            (void)remaining.processCommand("TX");
+            drain();
+            wire.clear();
+        }
+        drain();
+        check(wire.isEmpty() && f.radio.transmitOperation().permitsDispatch(TxCoordinator::monotonicMs()),
+              "SmartCAT session teardown cannot release the remaining client's PTT");
+        (void)remaining.processCommand("RX");
+        drain();
+        check(wire == QStringList{"xmit 0"}, "SmartCAT release uses its own captured request");
+    }
+    drain();
+}
+
+void producerNormalTails()
+{
+    Fixture f;
+    QObject owner;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer(&owner);
+    const TxCoordinator::Request first = producer.request();
+    TransmitModel::PttRelease tail;
+    f.radio.transmitModel().setPttOffHook([&tail](TransmitModel::PttRelease release) {
+        tail = std::move(release);
+    });
+    check(f.radio.requestProducerPttOn(first, TransmitModel::PttSource::TciHardware),
+          "scoped hardware PTT uses the normal preflight");
+    const TxCoordinator::Context firstMedia = f.radio.captureTxMedia(first);
+    f.radio.requestProducerPttOff(first, TransmitModel::PttSource::TciHardware);
+    f.radio.requestProducerPttOff(first, TransmitModel::PttSource::TciHardware);
+    check(tail.current() && firstMedia.permitsDispatch(TxCoordinator::monotonicMs())
+              && f.commands == QStringList{"mox:on"},
+          "scoped normal release retains media through one delayed tail");
+    const TransmitModel::PttRelease staleTail = tail;
+    const TxCoordinator::Request second = producer.request();
+    check(f.radio.requestProducerPttOn(second, TransmitModel::PttSource::TciHardware),
+          "fresh scoped request supersedes an in-flight normal tail");
+    const TxCoordinator::Context secondMedia = f.radio.captureTxMedia(second);
+    staleTail.release();
+    check(!staleTail.current() && !firstMedia.permitsDispatch(TxCoordinator::monotonicMs())
+              && secondMedia.permitsDispatch(TxCoordinator::monotonicMs())
+              && f.commands == QStringList({"mox:on", "mox:on"}),
+          "superseded tail retires only its original producer intent");
+    f.radio.requestProducerPttOff(second, TransmitModel::PttSource::TciHardware);
+    tail.release();
+    tail.release();
+    check(f.commands == QStringList({"mox:on", "mox:on", "mox:off"})
+              && !secondMedia.permitsDispatch(TxCoordinator::monotonicMs()),
+          "scoped tail completes exactly once and ends its media authority");
+
+    const TxCoordinator::Request third = producer.request();
+    const TxCoordinator::Request fourth = producer.request();
+    check(f.radio.requestProducerPttOn(third, TransmitModel::PttSource::TciHardware)
+              && f.radio.setProducerTransmit(fourth, true), "compatible contributors can overlap");
+    f.commands.clear();
+    f.radio.abortProducerPtt(third, TransmitModel::PttSource::TciHardware);
+    f.radio.abortProducerPtt(third, TransmitModel::PttSource::TciHardware);
+    check(f.commands.isEmpty()
+              && f.radio.captureTxMedia(fourth).permitsDispatch(TxCoordinator::monotonicMs()),
+          "teardown and late-edge retries cannot unkey another contributor");
+    f.radio.setProducerTransmit(fourth, false);
+}
+
+#ifdef HAVE_WEBSOCKETS
+void tciProducerLifetimes()
+{
+    // Drive the production server handler with disconnected WebSocket
+    // objects. No listen(), connect(), socket peer, or radio transport.
+    Fixture f;
+    QWebSocket socket;
+    TciServer server(&f.radio);
+    TxOperationIntegrationTestAccess::addTciClient(server, socket, f.radio);
+    TxOperationIntegrationTestAccess::deferTciRoute(server);
+    TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+    TxOperationIntegrationTestAccess::tciRequest(server, socket, false);
+    TxOperationIntegrationTestAccess::drainTciRoute(server);
+    check(f.commands.isEmpty(), "TCI off before deferred route completion cannot key later");
+    TxOperationIntegrationTestAccess::tciRequest(server, socket, true);
+    check(f.commands.contains("mox:on"), "fresh TCI request is admitted through its accepted session");
+    const TxCoordinator::Producer other = f.radio.registerTxProducer();
+    const TxCoordinator::Request otherRequest = other.request();
+    check(f.radio.setProducerTransmit(otherRequest, true), "CAT-compatible contributor can join TCI operation");
+    f.commands.clear();
+    TxOperationIntegrationTestAccess::disconnectTciClient(server, socket);
+    check(f.commands.isEmpty() && f.radio.captureTxMedia(otherRequest).permitsDispatch(TxCoordinator::monotonicMs()),
+          "TCI teardown retains another producer's PTT and media authority");
+    f.radio.setProducerTransmit(otherRequest, false);
+}
+#endif
 } // namespace
 
 int main(int argc, char** argv)
@@ -1086,5 +1294,10 @@ int main(int argc, char** argv)
     queuedCwSessionAndTcpFences();
     scopedCompatibilityStop();
     testInjectionReopensAdmission();
+    protocolProducerLifetimes();
+    producerNormalTails();
+#ifdef HAVE_WEBSOCKETS
+    tciProducerLifetimes();
+#endif
     return failures ? 1 : 0;
 }

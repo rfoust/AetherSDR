@@ -348,6 +348,7 @@ private:
     // (the DAX stream-wait timeout) cannot act on a later one.
     quint64 m_txGeneration{0};
     TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Request m_txRequest;
     TxCoordinator::Context m_txContext;
     QMetaObject::Connection m_txPttConfirmConnection;
     QMetaObject::Connection m_txPttConfirmedConnection;

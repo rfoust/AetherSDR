@@ -79,6 +79,7 @@ private:
     AudioEngine*         m_audioEngine{nullptr};
     RadioModel*         m_radioModel{nullptr};
     TxCoordinator::Producer m_beaconProducer;
+    TxCoordinator::Request m_beaconRequest;
     TxCoordinator::Context m_beaconContext;
     PskReporterClient*  m_client{nullptr};
     PskReporterClient*  m_globalClient{nullptr};

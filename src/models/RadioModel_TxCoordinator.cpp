@@ -22,6 +22,19 @@ TxCoordinator::Producer RadioModel::registerTxProducer(QObject* lifetime, bool c
     return producer;
 }
 
+TxCoordinator::Producer RadioModel::registerTxProducer()
+{
+    return QThread::currentThread() == thread() ? m_txCoordinator.registerProducer() : TxCoordinator::Producer{};
+}
+
+TxCoordinator::Context RadioModel::captureTxMedia(const TxCoordinator::Request& request) const
+{
+    if (QThread::currentThread() != thread() || m_txSessionClosing || !m_backend) {
+        return {};
+    }
+    return m_txCoordinator.mediaContext(request);
+}
+
 TxCoordinator::Context RadioModel::captureTxMedia(const TxCoordinator::Producer& producer) const
 {
     if (QThread::currentThread() != thread() || m_txSessionClosing || !m_backend) {
@@ -32,6 +45,89 @@ TxCoordinator::Context RadioModel::captureTxMedia(const TxCoordinator::Producer&
 
 bool RadioModel::beginLocalTxActivity(TxActivity activity)
 {
+    return beginTxActivity(activity, nullptr);
+}
+
+bool RadioModel::requestProducerPttOn(const TxCoordinator::Request& request,
+                                     TransmitModel::PttSource source)
+{
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    bool engaged = false;
+    m_transmitModel.requestPttOn(source, [this, request]() -> TransmitModel::KeyingPermit {
+        if (!beginTxActivity(TxActivity::Mox, &request)) {
+            return {};
+        }
+        const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+        return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
+    }, [this, request, source, &engaged] {
+        engaged = setProducerTransmit(request, true, source);
+    });
+    if (!engaged) {
+        // Preflight/admission can reenter. A refusal is not a held request
+        // that a later callback may opportunistically turn into transmit.
+        (void)setProducerTransmit(request, false, source);
+    }
+    return engaged;
+}
+
+void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
+                                      TransmitModel::PttSource source)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    const TxCoordinator::Intent intent = m_txCoordinator.closeRequest(request);
+    if (!intent.pending()) {
+        return;
+    }
+    const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+    if (m_txCoordinator.hasOtherIntents(operation, intent)) {
+        endLocalTxActivity(intent);
+        m_txRequested = activeTxActivities() & static_cast<unsigned>(TxActivity::Mox);
+        return;
+    }
+    const QPointer<RadioModel> receiver(this);
+    m_transmitModel.requestPttOff(source, {
+        [operation, intent] { return operation.permitsCleanup() && intent.pending(); },
+        [receiver, request, source] {
+            if (receiver) {
+                receiver->setTransmitImpl(false, source, &request, true);
+            }
+        },
+        [receiver, intent] {
+            if (receiver) {
+                receiver->endLocalTxActivity(intent);
+            }
+        }});
+}
+
+void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
+                                 TransmitModel::PttSource source)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    (void)m_txCoordinator.closeRequest(request);
+    const TxCoordinator::Intent intent = m_txCoordinator.requestIntent(request);
+    if (intent.pending()) {
+        (void)setTransmitImpl(false, source, &request, true);
+        return;
+    }
+    const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+    if (operation.permitsCleanup() && !m_txCoordinator.hasOtherIntents(operation, {})) {
+        // Retry only this operation's one-way stop after a late radio edge.
+        // A new contributor or connection can never inherit this cleanup.
+        requestTransmitStop(operation);
+    }
+}
+
+bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request)
+{
+    if (request && !m_txCoordinator.acceptsRequest(*request)) {
+        return false;
+    }
     if (m_txSessionClosing) {
         emitInterlockNotification(tr("Transmit is unavailable while the radio disconnects."),
                                   QStringLiteral("tx-session-closing"));
@@ -113,16 +209,20 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
         m_txOperationActivities = 0;
     }
     m_txOperation = admission.operation;
-    const TxCoordinator::Intent intent = m_txCoordinator.beginIntent(
-        m_txOperation, m_localTxIntents.value(activity), activity);
+    const TxCoordinator::Intent intent = request
+        ? m_txCoordinator.beginRequest(*request, m_txOperation, activity)
+        : m_txCoordinator.beginIntent(m_txOperation, m_localTxIntents.value(activity), activity);
     if (!intent.pending()) {
         qCWarning(lcProtocol) << "RadioModel: TX producer intent could not be registered";
         completeLocalTxIfDrained();
         return false;
     }
-    m_localTxIntents.insert(activity, intent);
+    if (!request) {
+        m_localTxIntents.insert(activity, intent);
+    }
     m_txOperationActivities |= static_cast<unsigned>(activity);
-    m_backend->setTransmitContext(captureTxMedia(m_backendTxProducer));
+    m_backend->setTransmitContext(m_txCoordinator.mediaContext(m_backendTxProducer,
+        request ? m_txCoordinator.requestOperation(*request) : m_txOperation));
     return true;
 }
 
@@ -182,16 +282,25 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
     };
 }
 
-TxCoordinator::Completion RadioModel::trackTxQueue(const TxCoordinator::Operation& operation)
+TxCoordinator::Completion RadioModel::trackTxQueue(const TxCoordinator::Operation& operation,
+                                                   std::function<void()> finished)
 {
     const QPointer<RadioModel> receiver(this);
     const auto consumed = trackTxDelivery(operation);
-    return TxCoordinator::Completion([receiver, consumed] {
+    const auto finish = [receiver, consumed, finished] {
+        if (receiver) {
+            consumed();
+        }
+        if (receiver && finished) {
+            finished();
+        }
+    };
+    return TxCoordinator::Completion([receiver, finish] {
         if (receiver) {
             if (QThread::currentThread() == receiver->thread()) {
-                consumed();
+                finish();
             } else {
-                QMetaObject::invokeMethod(receiver, consumed, Qt::QueuedConnection);
+                QMetaObject::invokeMethod(receiver, finish, Qt::QueuedConnection);
             }
         }
     });

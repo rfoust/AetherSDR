@@ -22,6 +22,12 @@ struct MetisClientTestAccess {
     // No start(), bind(), peer or datagrams: inject streaming state and inspect
     // packets using the same builder as the transport.
     static void setStreaming(MetisClient& client) { client.m_running = true; }
+    static void writer(MetisClient& client,
+                       std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> sink)
+    {
+        client.m_packetSinkForTest = std::move(sink);
+    }
+    static void send(MetisClient& client) { client.sendControlPacket(); }
 };
 }
 
@@ -338,6 +344,52 @@ int main(int argc, char** argv)
         const auto stopped = fenced.buildNextControlPacket();
         check(!anyFrameKeyed(stopped) && !payloadNonZero(stopped),
               "cancellation fences latched MOX and internally generated CW at the packet builder");
+    }
+
+    {
+        TxTestAuthority tx;
+        MetisClient held;
+        held.enableTransmit(true);
+        const auto first = tx.coordinator.registerProducer();
+        const auto second = tx.coordinator.registerProducer();
+        const auto a = first.request();
+        const auto b = second.request();
+        const auto aIntent = tx.coordinator.beginRequest(a, tx.operation,
+            AetherSDR::TxCoordinator::Activity::Mox);
+        const auto bIntent = tx.coordinator.beginRequest(b, tx.operation,
+            AetherSDR::TxCoordinator::Activity::Mox);
+        held.setMox(true, tx.coordinator.requestOperation(a));
+        held.setMox(true, tx.coordinator.requestOperation(b));
+        (void)tx.coordinator.endIntent(bIntent);
+        second.invalidate();
+        check(anyFrameKeyed(held.buildNextControlPacket()),
+              "releasing the most recent contributor preserves another live MOX hold");
+        first.invalidate();
+        check(!anyFrameKeyed(held.buildNextControlPacket()),
+              "last producer death immediately fences held MOX before queued cleanup");
+        held.setMox(true, tx.coordinator.requestOperation(b));
+        check(!anyFrameKeyed(held.buildNextControlPacket()),
+              "sustaining an existing latch cannot admit a stale queued key-on");
+        (void)tx.coordinator.endIntent(aIntent);
+    }
+
+    {
+        TxTestAuthority tx;
+        MetisClient entered;
+        entered.enableTransmit(true);
+        entered.setMox(true, tx.operation);
+        bool written = false;
+        MetisClientTestAccess::writer(entered, [&](const auto& packet) -> qint64 {
+            written = anyFrameKeyed(packet);
+            check(tx.coordinator.hasInFlightDispatches(), "Metis terminal control writer holds its dispatch guard");
+            (void)tx.coordinator.cancel(tx.actor, tx.operation);
+            check(!tx.coordinator.acknowledgeStopped(tx.operation),
+                  "reentrant teardown cannot acknowledge an entered Metis write");
+            return packet.size();
+        });
+        MetisClientTestAccess::send(entered);
+        check(written && tx.coordinator.acknowledgeStopped(tx.operation),
+              "Metis writer guard ends only after the terminal writer returns");
     }
 
     if (g_failures == 0)
