@@ -20,6 +20,7 @@
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
+#include "MidiTxDispatch.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
@@ -1881,27 +1882,10 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
 bool MainWindow::dispatchScopedMidiTx(const QString& id, float value,
                                      const std::shared_ptr<TxController>& controller)
 {
-    const bool cw = isCwMomentaryActionId(id);
-    const bool mox = id == QLatin1String("tx.mox") || id == QLatin1String("cw.ptt");
-    const bool tune = id == QLatin1String("tx.tune") || id == QLatin1String("global.twoToneTune");
-    const bool atu = id == QLatin1String("tx.atuStart");
-    if (!cw && !mox && !tune && !atu) { return false; }
-    // Recognized TX input never falls through to the native setter, even
-    // when its source has gone away or cancellation invalidated the queue.
-    if (!controller) { return true; }
-    if (cw) {
-        return handleScopedCwMomentaryShortcut(id, value > 0.5f, controller, false);
-    }
-    const TxController::Activity activity = atu ? TxController::Activity::Atu
-        : tune ? TxController::Activity::Tune : TxController::Activity::Mox;
-    const bool trigger = atu || id == QLatin1String("global.twoToneTune");
-    const bool on = trigger || (value == -1.0f
-        ? !(tune ? m_radioModel.transmitModel().isTuning() : m_radioModel.transmitModel().isTransmitting())
-        : value > 0.5f);
-    const auto input = on ? controller->capture(activity) : controller->current(activity);
-    if (on) { (void)input.start(id == QLatin1String("global.twoToneTune")); }
-    else { input.stop(); }
-    return true;
+    return dispatchMidiTxInput(id, value, m_radioModel, controller,
+        [this](const QString& action, bool press, const std::shared_ptr<TxController>& source) {
+            (void)handleScopedCwMomentaryShortcut(action, press, source, false);
+        });
 }
 
 void MainWindow::registerMidiParams()

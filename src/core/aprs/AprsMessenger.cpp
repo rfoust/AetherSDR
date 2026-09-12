@@ -74,6 +74,7 @@ void AprsMessenger::onPacket(const aprs::Packet& packet)
                 && m.counterpart.compare(packet.source, Qt::CaseInsensitive) == 0
                 && (m.state == State::Sent || m.state == State::Pending)) {
                 m.state = acked ? State::Acked : State::Rejected;
+                m.input = {}; // History no longer owns a live retry program.
                 emit activity(QStringLiteral("APRS message %1 to %2 %3.")
                                   .arg(m.msgNo, m.counterpart,
                                        acked ? QStringLiteral("acknowledged")
@@ -214,6 +215,7 @@ void AprsMessenger::serviceRetries()
             if (found == m_messages.end()) { continue; }
             if (found->tries >= kMaxTries) {
                 found->state = State::Failed;
+                found->input = {};
             } else {
                 ++found->tries;
                 found->nextTryUtc = now.addSecs(kRetryIntervalSecs);

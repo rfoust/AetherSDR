@@ -166,6 +166,9 @@ signals:
 private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2TxGateTestAccess;
+    void applyKeying(bool key, const TxCoordinator::Operation& operation,
+                     const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
     // timer here rather than by MetisClient's receive path so the tick survives

@@ -234,6 +234,36 @@ static void testRetryReentrancy()
     CHECK(!destroyed, "retry callback can tear down the messenger safely");
 }
 
+static void testCompletedHistoryReleasesRequests()
+{
+    TxCoordinator coordinator({});
+    const auto producer = coordinator.registerProducer();
+    AprsMessenger messenger;
+    messenger.setMyAddress(*Address::parse(QStringLiteral("N0CALL-9")));
+    // More historical messages than the shared request budget: completed
+    // records must retain text/status, not scarce live-input handles.
+    for (int i = 0; i < TxCoordinator::kMaximumRequests + 8; ++i) {
+        const auto input = producer.request();
+        CHECK(input.valid(), "completed APRS history leaves capacity for fresh operator input");
+        if (!input.valid()) { return; }
+        messenger.sendMessage("W1AW", "history", input);
+        const QString number = messenger.messages().last().msgNo;
+        if (i % 3 == 2) {
+            for (int retry = 0; retry < 4; ++retry) {
+                AprsMessengerTestAccess::retryNow(messenger);
+            }
+        } else {
+            messenger.onPacket(parseInfo(QStringLiteral("W1AW"),
+                QStringLiteral(":N0CALL-9 :%1%2")
+                    .arg(i % 3 == 0 ? QStringLiteral("ack") : QStringLiteral("rej"), number).toLatin1()));
+        }
+        CHECK(!messenger.messages().last().input.valid(),
+              "acknowledged, rejected and exhausted messages retire stored input authority");
+    }
+    CHECK(messenger.messages().size() == TxCoordinator::kMaximumRequests + 8,
+          "retiring request handles preserves completed message history");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -242,6 +272,7 @@ int main(int argc, char** argv)
     testStationListDedupe();
     testOriginalInputSurvivesRetries();
     testRetryReentrancy();
+    testCompletedHistoryReleasesRequests();
     if (g_failures) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
         return 1;

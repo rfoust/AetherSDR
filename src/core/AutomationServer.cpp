@@ -2448,7 +2448,11 @@ bool AutomationServer::start(const QString& serverName)
 
 void AutomationServer::stop()
 {
+    const QPointer<AutomationServer> self(this);
     forceUnkey("automation bridge stopping");
+    if (!self) {
+        return;
+    }
     if (m_meterWindowActive) {
         sampleMeterWindow();
         m_meterWindowActive = false;
@@ -2551,7 +2555,11 @@ void AutomationServer::setTxAllowed(bool allowed)
     if (m_txAllowed == allowed)
         return;  // idempotent
     m_txAllowed = allowed;
+    const QPointer<AutomationServer> self(this);
     forceUnkey("TX automation permission changed");
+    if (!self || m_txAllowed != allowed) {
+        return;
+    }
     if (allowed) {
         // Start the force-unkey poller (mirrors the start()-time setup). The
         // TX_MAX_MS / TX_MAX_POWER limits are read unconditionally in start(),
@@ -4348,7 +4356,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
     const bool transmitControl = isTransmitControl(w);
-    if (transmitControl && !m_txAllowed) {
+    if (transmitControl && txActionRequiresPermission(w) && !m_txAllowed) {
         qCWarning(lcAutomation).noquote()
             << "BLOCKED transmit-related invoke on" << target
             << "(" << shortClassName(w) << ")";
@@ -4674,8 +4682,13 @@ void AutomationServer::setClockModel(AetherClockModel* model)
 
 void AutomationServer::setRadioModel(RadioModel* model)
 {
+    const QPointer<AutomationServer> self(this);
+    const QPointer<RadioModel> target(model);
     if (m_radioModel != model) {
         forceUnkey("automation radio model changed");
+        if (!self) {
+            return;
+        }
     }
     if (m_meterWindowActive) {
         sampleMeterWindow();
@@ -4683,7 +4696,7 @@ void AutomationServer::setRadioModel(RadioModel* model)
         m_meterWindowTimer->stop();
         disconnect(m_meterWindowSamples);
     }
-    m_radioModel = model;
+    m_radioModel = target;
 }
 
 QJsonObject AutomationServer::doMeterWindow(const QString& action, const QString& value)
@@ -7096,9 +7109,14 @@ QJsonObject AutomationServer::doAtu(const QString& action)
 // operation is not ours to stop. Invalidate before any synchronous notification.
 void AutomationServer::forceUnkey(const char* reason)
 {
+    const QPointer<AutomationServer> self(this);
     ++m_txPermissionEpoch;
     const bool changing = std::exchange(m_txAuthorizationChanging, true);
-    const auto restore = qScopeGuard([this, changing] { m_txAuthorizationChanging = changing; });
+    const auto restore = qScopeGuard([self, changing] {
+        if (self) {
+            self->m_txAuthorizationChanging = changing;
+        }
+    });
     const std::shared_ptr<TxController> controller = std::exchange(m_txController, {});
     const bool hadWork = controller && controller->hasWork();
     clearTxBridgeInitiated();
@@ -7116,10 +7134,15 @@ std::shared_ptr<TxController> AutomationServer::txController(bool mayKey)
         return {};
     }
     if (!m_txController || !m_txController->valid()) {
-        forceUnkey("automation transmit session changed");
-        m_txController = std::make_shared<TxController>(m_radioModel);
-        const std::weak_ptr<TxController> weak = m_txController;
         const QPointer<AutomationServer> self(this);
+        const QPointer<RadioModel> radio(m_radioModel);
+        forceUnkey("automation transmit session changed");
+        if (!self || !radio || radio != m_radioModel || (mayKey && !m_txAllowed)
+            || m_readOnly || m_txAuthorizationChanging) {
+            return {};
+        }
+        m_txController = std::make_shared<TxController>(radio);
+        const std::weak_ptr<TxController> weak = m_txController;
         m_txController->setAdmissionObserver([self, weak] {
             const std::shared_ptr<TxController> controller = weak.lock();
             if (self && controller && controller == self->m_txController) {
@@ -7133,12 +7156,20 @@ std::shared_ptr<TxController> AutomationServer::txController(bool mayKey)
 QJsonObject AutomationServer::invokeTxAction(QObject* object, const QString& target,
                                              const QString& action, const QString& value)
 {
-    TxKeyingAction::Prepared prepared = prepareTxKeyingAction(object, txController(), action, value);
+    const QPointer<AutomationServer> self(this);
+    const QPointer<QObject> guardedObject(object);
+    const std::shared_ptr<TxController> controller = txController();
+    if (!self || !guardedObject) {
+        return err(QStringLiteral("scoped control disappeared during preparation"));
+    }
+    const bool requiresTx = txActionRequiresPermission(object) || bool(controller);
+    TxKeyingAction::Prepared prepared = prepareTxKeyingAction(object, controller, action, value);
+    if (!self) { return err(QStringLiteral("bridge disappeared during preparation")); }
     if (!prepared) {
         return err(QStringLiteral("transmit control has no scoped action for '")
                    + action + QStringLiteral("': ") + target);
     }
-    deferInvokeAction(std::move(prepared), true);
+    deferInvokeAction(std::move(prepared), requiresTx);
     return {{QStringLiteral("ok"), true}, {QStringLiteral("target"), target},
             {QStringLiteral("action"), action}, {QStringLiteral("deferred"), true}};
 }
@@ -9417,7 +9448,7 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
 
     if (!m_txAllowed) {
         for (const QWidget* parent = widget; parent; parent = parent->parentWidget()) {
-            if (!isTransmitControl(parent)) {
+            if (!isTransmitControl(parent) || !txActionRequiresPermission(parent)) {
                 continue;
             }
             qCWarning(lcAutomation).noquote()
@@ -10592,7 +10623,7 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     const bool transmitControl = hasTransmitControlInChain(w);
     if (!m_txAllowed && transmitControl) {
         for (const QWidget* p = w; p; p = p->parentWidget()) {
-            if (!isTransmitControl(p)) {
+            if (!isTransmitControl(p) || !txActionRequiresPermission(p)) {
                 continue;
             }
             qCWarning(lcAutomation).noquote()

@@ -97,9 +97,14 @@ public:
         // queued-command admission or audio. Compatible MOX/CW-PTT holds
         // sustain the latch; the last live producer disappearing clears it.
         [[nodiscard]] Operation heldKeying() const;
+        // Separate sustain for an admitted CW carrier or its backend-owned
+        // break-in envelope. A bare CW element never sustains ordinary MOX.
+        // Like heldKeying(), this cannot admit a queued original command.
+        [[nodiscard]] Operation heldCwKeying() const;
         [[nodiscard]] Dispatch beginDispatch(qint64 monotonicMs, bool keying = true) const;
     private:
         friend class TxCoordinator;
+        [[nodiscard]] Operation heldActivities(unsigned activities) const;
         std::shared_ptr<OperationState> m_state;
         std::shared_ptr<ProducerState> m_producer;
         std::shared_ptr<IntentState> m_intent;

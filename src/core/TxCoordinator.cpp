@@ -87,14 +87,24 @@ TxCoordinator::Operation TxCoordinator::Operation::withKeyingPermit(std::functio
 
 TxCoordinator::Operation TxCoordinator::Operation::heldKeying() const
 {
-    if (!m_intent || (m_intent->activity != Activity::Mox && m_intent->activity != Activity::CwPtt)) {
+    return heldActivities(static_cast<unsigned>(Activity::Mox) | static_cast<unsigned>(Activity::CwPtt));
+}
+
+TxCoordinator::Operation TxCoordinator::Operation::heldCwKeying() const
+{
+    return heldActivities(static_cast<unsigned>(Activity::CwKey));
+}
+
+TxCoordinator::Operation TxCoordinator::Operation::heldActivities(unsigned activities) const
+{
+    if (!m_intent || !(static_cast<unsigned>(m_intent->activity) & activities)) {
         return *this;
     }
     Operation held = *this;
     held.m_producer.reset();
     held.m_intent.reset();
     const std::weak_ptr<OperationState> state = m_state;
-    return held.withKeyingPermit([state] {
+    return held.withKeyingPermit([state, activities] {
         const std::shared_ptr<OperationState> operation = state.lock();
         if (!operation) {
             return false;
@@ -105,7 +115,7 @@ TxCoordinator::Operation TxCoordinator::Operation::heldKeying() const
         }
         for (const std::weak_ptr<IntentState>& entry : *holds) {
             const std::shared_ptr<IntentState> intent = entry.lock();
-            if (intent && (intent->activity == Activity::Mox || intent->activity == Activity::CwPtt)
+            if (intent && (static_cast<unsigned>(intent->activity) & activities)
                 && !intent->ended.load(std::memory_order_acquire)
                 && (!intent->producer || intent->producer->valid.load(std::memory_order_acquire))
                 && (!intent->producer || intent->producerEpoch == intent->producer->inputEpoch.load(std::memory_order_acquire))

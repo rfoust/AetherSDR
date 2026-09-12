@@ -88,7 +88,14 @@ Packet program roots are captured when the operator or authorized controller
 arms receive replies, a beacon, digipeating, PMS or a terminal session. Retries
 and generated frames derive from that root, never from the session current at
 timer/output time. Stored message history deliberately contains no persistent
-TX authority. KISS frames use their accepted client's producer. WSPR retains
+TX authority; completed ACK/reject/exhausted records release their live request
+cells too. Native-enabled KISS frames use their accepted client's producer.
+Generic modem enable and pointer actions use the same scoped receive action as
+the explicit bridge command: without a TX grant they enable RX without arming
+automatic APRS replies. A bridge-started KISS listener is receive-only, even
+when that bridge has a TX grant; granting TX to later KISS peers is not part of
+this increment. Port changes preserve that policy. Native operator enable and
+startup retain the existing per-client producers and defaults. WSPR retains
 its schedule root through PTT, borrowed audio-route cleanup and generation-
 matched pump/generator stop; another program cannot overwrite that route.
 
@@ -125,6 +132,9 @@ not mutable models. Thus the most recently admitted client leaving does not
 unkey a remaining contributor, but the last producer's death fences the latch
 even before its queued cleanup arrives. This sustain permit is never used to
 admit a queued key command or ordinary TX audio.
+CW carrier holds and backend-owned break-in MOX use a separate CW sustain
+permit. Overlapping or successive elements retain the carrier through the
+normal hang, while a bare CW hold cannot sustain ordinary manual MOX.
 
 Icom scheduling and retained retries preserve original command and audio
 authority. A cancelled CW batch cannot borrow a still-held MOX operation.

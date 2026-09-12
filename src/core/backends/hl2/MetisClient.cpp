@@ -611,6 +611,16 @@ void MetisClient::requestPipelineReset()
 
 void MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
 {
+    setMoxImpl(keyed, operation, false);
+}
+
+void MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation)
+{
+    setMoxImpl(keyed, operation, true);
+}
+
+void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn)
+{
     if (!TxCoordinator::Command{operation, keyed}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
@@ -621,7 +631,8 @@ void MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
         return;
     }
     m_mox = keyed;
-    m_moxOperation = keyed ? operation.heldKeying() : operation;
+    m_moxOperation = keyed
+        ? (cwBreakIn ? operation.heldCwKeying() : operation.heldKeying()) : operation;
 }
 
 void MetisClient::setTxFrequencyHz(std::uint32_t hz)
@@ -673,7 +684,9 @@ void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operat
     }
     m_cwMode = true;
     m_cwKeyDown = down;
-    m_cwOperation = operation;
+    // The engine suppresses a global up while another CW contributor holds
+    // down. Retain that compatible set after checking this original command.
+    m_cwOperation = down ? operation.heldCwKeying() : operation;
 }
 
 void MetisClient::clearCwKeying()

@@ -489,6 +489,44 @@ void diagnosticCannotRenewAuthorization()
     check(!RadioCertificationTestAccess::key(cert, true) && f.commands.isEmpty(),
           "a continuing diagnostic cannot adopt replacement authorization between stages");
 }
+
+void cleanupCanDestroyBridge()
+{
+    for (int action = 0; action < 7; ++action) {
+        Fixture f;
+        auto bridge = std::make_unique<AutomationServer>();
+        bridge->setRadioModel(&f.radio);
+        bridge->setTxAllowed(true);
+        const auto input = AutomationServerTestAccess::controller(*bridge)->capture(TxController::Activity::Mox);
+        check(input.start(), "lifetime fixture owns an admitted bridge input");
+        f.backend->keyingWriter = [&](bool on) {
+            if (!on) { bridge.reset(); }
+        };
+        switch (action) {
+        case 0: bridge->setTxAllowed(false); break;
+        case 1: bridge->setReadOnly(true); break;
+        case 2: bridge->setAuthToken(QStringLiteral("replacement-test-token")); break;
+        case 3: bridge->setRadioModel(nullptr); break;
+        case 4: bridge->stop(); break;
+        case 5:
+            AutomationServerTestAccess::setMaxKeyMs(*bridge, 0);
+            AutomationServerTestAccess::poll(*bridge);
+            break;
+        case 6:
+            // Leave the controller with its original, now cancelled session
+            // input. Refreshing it still retires its unconfirmed local tail.
+            f.backend->keyingWriter = {};
+            f.radio.cancelLocalTransmit();
+            f.backend->keyingWriter = [&](bool on) {
+                if (!on) { bridge.reset(); }
+            };
+            check(!AutomationServerTestAccess::controller(*bridge),
+                  "controller refresh stops if retiring its predecessor destroys the bridge");
+            break;
+        }
+        check(!bridge && !input.valid(), "unkey callback may destroy bridge during authorization cleanup");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -514,5 +552,6 @@ int main(int argc, char** argv)
     authorizationLifetimeFencesCapturedWork();
     policingPrecedesBackendReentry();
     diagnosticCannotRenewAuthorization();
+    cleanupCanDestroyBridge();
     return failures == 0 ? 0 : 1;
 }

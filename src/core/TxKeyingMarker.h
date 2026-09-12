@@ -35,6 +35,9 @@ struct TxKeyingAction {
     using Prepare = std::function<Prepared(const std::shared_ptr<TxController>&,
                                            const QString&, const QString&)>;
     Prepare prepare;
+    // Receive controls may optionally establish an automatic-response program.
+    // Without a TX controller their prepared action must remain receive-only.
+    bool requiresTxPermission{true};
 };
 inline constexpr char kTxKeyingActionProperty[] = "aetherTxKeyingAction";
 
@@ -60,15 +63,31 @@ inline void registerTxKeyingAction(QObject* object, TxKeyingAction::Prepare prep
         QVariant::fromValue(std::make_shared<const TxKeyingAction>(TxKeyingAction{std::move(prepare)})));
 }
 
+inline void registerReceiveControlAction(QObject* object, TxKeyingAction::Prepare prepare)
+{
+    if (!object) { return; }
+    object->setProperty(kTxKeyingProperty, true);
+    object->setProperty(kTxKeyingActionProperty,
+        QVariant::fromValue(std::make_shared<const TxKeyingAction>(
+            TxKeyingAction{std::move(prepare), false})));
+}
+
+inline bool txActionRequiresPermission(const QObject* object)
+{
+    const auto endpoint = object ? object->property(kTxKeyingActionProperty)
+        .value<std::shared_ptr<const TxKeyingAction>>() : nullptr;
+    return !endpoint || endpoint->requiresTxPermission;
+}
+
 inline TxKeyingAction::Prepared prepareTxKeyingAction(QObject* object,
     const std::shared_ptr<TxController>& controller, const QString& action, const QString& value)
 {
-    if (!object || !controller || !controller->valid()) {
+    if (!object || (controller && !controller->valid())) {
         return {};
     }
     const std::shared_ptr<const TxKeyingAction> endpoint =
         object->property(kTxKeyingActionProperty).value<std::shared_ptr<const TxKeyingAction>>();
-    if (!endpoint || !endpoint->prepare) {
+    if (!endpoint || !endpoint->prepare || (endpoint->requiresTxPermission && !controller)) {
         return {};
     }
     const QPointer<QObject> guard(object);
@@ -77,7 +96,7 @@ inline TxKeyingAction::Prepared prepareTxKeyingAction(QObject* object,
         return {};
     }
     return [guard, controller, prepared = std::move(prepared)] {
-        if (guard && controller->valid()) {
+        if (guard && (!controller || controller->valid())) {
             if (const QWidget* widget = qobject_cast<QWidget*>(guard.data()); widget && !widget->isEnabled()) {
                 return;
             }

@@ -172,6 +172,8 @@ private:
         std::shared_ptr<TxController> controller;
         TxController::Input root;
     };
+    bool m_tncNativeAuthority{true};
+    ProgramInput m_tncAuthority;
     std::array<ProgramInput, static_cast<std::size_t>(TxProgram::Count)> m_txPrograms;
     bool setTxProgram(TxProgram program, bool enabled,
                       const std::shared_ptr<TxController>& controller = {},
@@ -182,6 +184,8 @@ private:
     void syncBaudRadios(Ax25ModemProfile profile);
     QJsonObject digiAutomationStatus() const;
     void setDecodeEnabled(bool enabled);
+    void setDecodeEnabledForAutomation(bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input);
     void applyDecodeEnabled(bool enabled);
     void enableDecodeForProgram(TxProgram program);
     // True when the backend runs the modulator on this host (HL2) rather than
@@ -268,6 +272,8 @@ private:
     // KISS TNC tab + TCP server wiring.
     QWidget* buildKissTncPage();
     void setTncEnabled(bool enabled, bool persist);
+    void configureTncAuthority(bool native,
+        const std::shared_ptr<TxController>& controller = {}, const TxController::Input& input = {});
     void applyTncStartOnStartup();
     void handleKissFrameFromClient(const QByteArray& ax25NoFcs,
                                   const TxCoordinator::Request& input);

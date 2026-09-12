@@ -3311,6 +3311,12 @@ void Hl2Backend::setPanFrameRate(const QString& panId, int fps)
 
 void Hl2Backend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    applyKeying(key, operation, completion, false);
+}
+
+void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation,
+                            const TxCoordinator::Completion& completion, bool cwBreakIn)
+{
     if (!TxCoordinator::Command{operation, key}.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
@@ -3331,7 +3337,7 @@ void Hl2Backend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& 
     // this explicit handoff the pending CW hang timer would later unkey a PTT
     // that is still being held.
     //
-    // The automatic CW path sets m_cwAutoKeyed only AFTER its own setKeying(true)
+    // The automatic CW path sets m_cwAutoKeyed only AFTER its own applyKeying(true)
     // call below, so that internal key-up cannot be mistaken for manual intent.
     if (key && m_keyed && m_cwAutoKeyed) {
         if (m_cwHangTimer) {
@@ -3482,8 +3488,12 @@ void Hl2Backend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& 
         }
     }
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation] {
-            metis->setMox(key, operation);
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation, cwBreakIn] {
+            if (cwBreakIn) {
+                metis->setCwMox(key, operation);
+            } else {
+                metis->setMox(key, operation);
+            }
         }, Qt::QueuedConnection);
     }
     if (!key) {
@@ -3564,7 +3574,7 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const 
         // an MOX/PTT the operator already asserted — matching Flex behavior and
         // piHPSDR's software-keyer path.
         if (breakIn && !m_keyed) {
-            setKeying(true, operation);
+            applyKeying(true, operation, {}, true);
             m_cwAutoKeyed = true;
         }
         return;

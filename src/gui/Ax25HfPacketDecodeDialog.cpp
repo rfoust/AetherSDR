@@ -1,4 +1,5 @@
 #include "Ax25HfPacketDecodeDialog.h"
+#include "ModemReceiveAction.h"
 #include <QScopeGuard>
 #include <utility>
 
@@ -849,10 +850,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(&m_shimThread, &QThread::finished, m_shim, &QObject::deleteLater);
     m_shimThread.start();
     m_kissServer = new KissTncServer(this);
-    m_kissServer->setTxControllerFactory([radio = QPointer<RadioModel>(m_radio)] {
-        return radio ? std::make_shared<TxController>(radio, TransmitModel::PttSource::Dax)
-                     : std::shared_ptr<TxController>{};
-    });
+    configureTncAuthority(true);
     m_heard = new HeardList(this);
     m_terminal = new TncTerminal(this);
     m_pms = new PmsMailbox(this);
@@ -1246,6 +1244,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_kissServer, &KissTncServer::clientCountChanged,
             this, [this](int) { refreshTncStatus(); });
     connect(m_tncEnable, &QCheckBox::toggled, this, [this](bool on) {
+        if (on) { configureTncAuthority(true); }
         setTncEnabled(on, true);
     });
     connect(m_tncStartOnStartup, &QCheckBox::toggled, this, [](bool on) {
@@ -1708,21 +1707,7 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                 return automationError(QStringLiteral("modem enable control is unavailable"));
             const bool on = (action == QLatin1String("on")
                              || action == QLatin1String("enable"));
-            if (on && !m_enableDecode->isChecked()) {
-                // Enabling RX via the bridge must not borrow a native
-                // operator's automatic ACK authority. No TX grant means RX
-                // only; an explicit grant is captured before dialog creation.
-                if (controller && input.valid()) {
-                    (void)setTxProgram(TxProgram::Receive, true, controller, input);
-                }
-                {
-                    const QSignalBlocker blocker(m_enableDecode);
-                    m_enableDecode->setChecked(true);
-                }
-                applyDecodeEnabled(true);
-            } else if (!on) {
-                m_enableDecode->setChecked(false);
-            }
+            setDecodeEnabledForAutomation(on, controller, input);
             // Verify rather than assume: the modem can refuse to start (no
             // audio engine, no attached slice). Reporting ok for work that did
             // not happen is worse than reporting the failure.
@@ -2068,6 +2053,20 @@ void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
     applyDecodeEnabled(enabled);
 }
 
+void Ax25HfPacketDecodeDialog::setDecodeEnabledForAutomation(bool enabled,
+    const std::shared_ptr<TxController>& controller, const TxController::Input& input)
+{
+    if (!m_enableDecode || m_enableDecode->isChecked() == enabled) { return; }
+    if (enabled && controller && input.valid()) {
+        (void)setTxProgram(TxProgram::Receive, true, controller, input);
+    }
+    {
+        const QSignalBlocker blocker(m_enableDecode);
+        m_enableDecode->setChecked(enabled);
+    }
+    applyDecodeEnabled(enabled);
+}
+
 void Ax25HfPacketDecodeDialog::enableDecodeForProgram(TxProgram kind)
 {
     if (!m_enableDecode || m_enableDecode->isChecked()) { return; }
@@ -2383,6 +2382,23 @@ void Ax25HfPacketDecodeDialog::setDigiEnabled(bool enabled,
 
 void Ax25HfPacketDecodeDialog::configureTxActions()
 {
+    registerModemReceiveAction(m_enableDecode, [this](bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
+        setDecodeEnabledForAutomation(enabled, controller, input);
+    });
+    registerModemReceiveAction(m_tncEnable, [this](bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
+        if (m_tncEnable->isChecked() == enabled) { return; }
+        if (enabled) {
+            setDecodeEnabledForAutomation(true, controller, input);
+            configureTncAuthority(false, controller, input);
+        }
+        {
+            const QSignalBlocker blocker(m_tncEnable);
+            m_tncEnable->setChecked(enabled);
+        }
+        setTncEnabled(enabled, true);
+    });
     auto checkedValue = [](QCheckBox* box, const QString& action, const QString& value) {
         const QString normalized = value.trimmed().toLower();
         return action == QLatin1String("setChecked")
@@ -2420,9 +2436,7 @@ void Ax25HfPacketDecodeDialog::configureTxActions()
     }
     registerTxKeyingAction(m_terminalSendButton, [this](const std::shared_ptr<TxController>& controller,
             const QString& action, const QString&) -> TxKeyingAction::Prepared {
-        const ProgramInput& program = m_txPrograms[static_cast<std::size_t>(TxProgram::Terminal)];
-        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)
-            || (program.root.valid() && !controller->sameController(program.controller))) {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) {
             return {};
         }
         const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
@@ -3568,6 +3582,24 @@ QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
     return page;
 }
 
+void Ax25HfPacketDecodeDialog::configureTncAuthority(bool native,
+    const std::shared_ptr<TxController>& controller, const TxController::Input& input)
+{
+    m_tncNativeAuthority = native;
+    m_tncAuthority = {controller, input};
+    m_kissServer->setTxControllerFactory([radio = QPointer<RadioModel>(m_radio), native] {
+        if (native) {
+            return radio ? std::make_shared<TxController>(radio, TransmitModel::PttSource::Dax)
+                         : std::shared_ptr<TxController>{};
+        }
+        // A bridge grant authorizes that bridge, not arbitrary later KISS
+        // peers. Automation may start the RX service; KISS TX delegation is
+        // not implemented. A native operator's enable retains the native
+        // per-client producers above.
+        return std::shared_ptr<TxController>{};
+    });
+}
+
 void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
 {
     if (persist) {
@@ -3578,7 +3610,11 @@ void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
         // The TNC needs the modem RX tap running to forward decodes to clients.
         if (m_enableDecode && !m_enableDecode->isChecked()) {
             appendSystemLine(QStringLiteral("Enabling the modem for the KISS TNC."));
-            m_enableDecode->setChecked(true);
+            if (m_tncNativeAuthority) {
+                m_enableDecode->setChecked(true);
+            } else {
+                setDecodeEnabledForAutomation(true, m_tncAuthority.controller, m_tncAuthority.root);
+            }
         }
         const quint16 port = static_cast<quint16>(
             m_tncPort ? m_tncPort->value() : TncSettings::kDefaultPort);

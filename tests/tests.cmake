@@ -1751,6 +1751,7 @@ add_test(NAME radio_discovery_test COMMAND radio_discovery_test)
 
 # Agent automation bridge phaseful-gesture lifecycle (#4353). Uses two real
 # QLocalSocket clients so the regression proves an independent request can run
+# The server binds a unique current-user QLocalServer name; exit 77 if unavailable.
 # while a QSlider remains genuinely down, plus auth/read-only/TX cleanup rails.
 # Retained until its refusal and TX-cleanup assertions have a socket-free
 # injected replacement; live automation cannot prove that a non-event occurred.
@@ -1764,7 +1765,7 @@ target_link_libraries(automation_server_gesture_test PRIVATE
 set_target_properties(automation_server_gesture_test PROPERTIES AUTOMOC ON)
 add_test(NAME automation_server_gesture_test COMMAND automation_server_gesture_test)
 set_tests_properties(automation_server_gesture_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SKIP_RETURN_CODE 77)
 
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp
@@ -5135,6 +5136,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_tx_gate_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test

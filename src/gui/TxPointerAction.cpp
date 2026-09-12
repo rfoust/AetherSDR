@@ -18,6 +18,7 @@ std::shared_ptr<TxPointerAction> TxPointerAction::prepare(QWidget* hit,
         return {};
     }
     const std::shared_ptr<TxController> scope = TxController::captureInputScope(controller);
+    if (controller && !scope) { return {}; }
     const QPointer<QAbstractButton> guard(button);
     TxKeyingAction::Prepared action = prepareTxKeyingAction(button, scope, QStringLiteral("click"), {});
     if (!guard || !action) { return {}; }
@@ -38,7 +39,7 @@ void TxPointerAction::press(const QPoint& global)
     if (button->focusPolicy() & Qt::ClickFocus) {
         button->setFocus(Qt::MouseFocusReason);
     }
-    if (button && m_controller->valid()) {
+    if (button && (!m_controller || m_controller->valid())) {
         button->setDown(true);
     }
 }
@@ -77,7 +78,7 @@ void TxPointerAction::clearDownState()
 
 bool TxPointerAction::hits(const QPoint& global) const
 {
-    if (!m_button || !m_button->isEnabled() || !m_controller || !m_controller->valid()) {
+    if (!m_button || !m_button->isEnabled() || (m_controller && !m_controller->valid())) {
         return false;
     }
     QRect area = m_button->rect();
