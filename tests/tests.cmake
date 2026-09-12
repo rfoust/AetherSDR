@@ -66,6 +66,39 @@ unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
 
+# Typed producer PCM, queued lifetime and compatibility: QtCore only, no sockets.
+add_executable(pcm_frame_test tests/pcm_frame_test.cpp)
+target_include_directories(pcm_frame_test PRIVATE src)
+target_link_libraries(pcm_frame_test PRIVATE Qt6::Core)
+add_test(NAME pcm_frame_test COMMAND pcm_frame_test)
+set_tests_properties(pcm_frame_test PROPERTIES TIMEOUT 30)
+
+# Actual backend/model/audio/parser wiring with injected PCM; binds no sockets.
+add_executable(pcm_compatibility_test tests/pcm_compatibility_test.cpp)
+target_link_libraries(pcm_compatibility_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pcm_compatibility_test COMMAND pcm_compatibility_test)
+set_tests_properties(pcm_compatibility_test PROPERTIES TIMEOUT 60)
+
+# Socket/device-free production RX queue, processing-domain and output checks.
+add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
+target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_rates_test COMMAND audio_engine_rates_test)
+set_tests_properties(audio_engine_rates_test PROPERTIES TIMEOUT 120)
+
+# Production auxiliary ingress/retirement versus DSP initialization; no sockets/devices.
+add_executable(audio_engine_pcm_lifetime_test tests/audio_engine_pcm_lifetime_test.cpp)
+target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
+set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
+
+add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
+    src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
+    src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
+    src/core/ClientPudu.cpp src/core/ClientPhaseRotator.cpp)
+target_include_directories(rx_client_effects_test PRIVATE src)
+add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
+set_tests_properties(rx_client_effects_test PROPERTIES TIMEOUT 30)
+
 # Pure shared-capture geometry policy: no sockets, settings, DSP or hardware.
 add_executable(shared_capture_policy_test
     tests/shared_capture_policy_test.cpp
@@ -1909,6 +1942,15 @@ target_include_directories(profile_transfer_test PRIVATE src)
 target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
 
+# #5612 — aborting an in-progress upload during cleanup or socket replacement
+# must not let a synchronous disconnect re-enter ProfileTransfer.
+add_executable(profile_transfer_cleanup_test
+    tests/profile_transfer_cleanup_test.cpp
+)
+target_include_directories(profile_transfer_cleanup_test PRIVATE src)
+target_link_libraries(profile_transfer_cleanup_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME profile_transfer_cleanup_test COMMAND profile_transfer_cleanup_test)
+
 add_executable(waveform_upload_state_test
     tests/waveform_upload_state_test.cpp
     src/core/WaveformUploadState.cpp
@@ -2011,6 +2053,48 @@ add_executable(mono_dsp_stereo_adapter_test
 target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
 target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
 add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
+
+# Socket/device-free tests of the real optional wrappers. The local C API
+# substitutes only apply half-gain and expose sample counts; these tests do
+# not load a downloaded model, SDK pack or GPU and do not claim inference.
+add_library(nr_test_nvafx_api SHARED tests/nr_test_nvafx_api.cpp)
+set_target_properties(nr_test_nvafx_api PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+add_executable(nr_rate_domain_test
+    tests/nr_rate_domain_test.cpp
+    tests/nr_test_df_api.cpp
+    src/core/DeepFilterFilter.cpp
+    src/core/NvidiaAfxFilter.cpp
+    src/core/MonoDspStereoAdapter.cpp
+    src/core/Resampler.cpp
+)
+target_compile_definitions(nr_rate_domain_test PRIVATE HAVE_DFNR HAVE_NVIDIA_AFX)
+target_include_directories(nr_rate_domain_test PRIVATE
+    src third_party/deepfilter/include third_party/r8brain)
+target_link_libraries(nr_rate_domain_test PRIVATE Qt6::Core ${CMAKE_DL_LIBS})
+set_target_properties(nr_rate_domain_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/nr-rate-domain-tests")
+add_dependencies(nr_rate_domain_test nr_test_nvafx_api)
+add_test(NAME nr_rate_domain_test
+    COMMAND nr_rate_domain_test $<TARGET_FILE:nr_test_nvafx_api>)
+
+if(ENABLE_SPECBLEACH)
+    add_executable(specbleach_rate_domain_test
+        tests/specbleach_rate_domain_test.cpp
+        src/core/SpecbleachFilter.cpp
+        src/core/MonoDspStereoAdapter.cpp
+        ${SPECBLEACH_SOURCES}
+    )
+    target_compile_definitions(specbleach_rate_domain_test PRIVATE HAVE_SPECBLEACH)
+    target_include_directories(specbleach_rate_domain_test PRIVATE src
+        third_party/libspecbleach/include third_party/libspecbleach/src
+        ${FFTW3_INCLUDE_DIRS} ${FFTW3_H_DIR})
+    target_link_libraries(specbleach_rate_domain_test PRIVATE Qt6::Core ${FFTW3F_LIB})
+    if(MSVC AND SPECBLEACH_STATIC_LIB)
+        add_dependencies(specbleach_rate_domain_test specbleach_build)
+        target_link_libraries(specbleach_rate_domain_test PRIVATE ${SPECBLEACH_STATIC_LIB})
+    endif()
+    add_test(NAME specbleach_rate_domain_test COMMAND specbleach_rate_domain_test)
+endif()
 
 # tests/TestEventLoop.h is test infrastructure that makes correctness claims, so
 # it carries its own proof — including a negative case that pins the #4693
@@ -2222,6 +2306,17 @@ add_executable(pan_recenter_policy_test
 )
 target_include_directories(pan_recenter_policy_test PRIVATE src)
 add_test(NAME pan_recenter_policy_test COMMAND pan_recenter_policy_test)
+
+add_executable(waterfall_time_marker_settings_test tests/waterfall_time_marker_settings_test.cpp)
+target_include_directories(waterfall_time_marker_settings_test PRIVATE src)
+target_link_libraries(waterfall_time_marker_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME waterfall_time_marker_settings_test COMMAND waterfall_time_marker_settings_test)
+
+# Pure row/timestamp geometry, no sockets or radio peer.
+add_executable(waterfall_time_markers_test tests/waterfall_time_markers_test.cpp)
+target_include_directories(waterfall_time_markers_test PRIVATE src)
+target_link_libraries(waterfall_time_markers_test PRIVATE Qt6::Core)
+add_test(NAME waterfall_time_markers_test COMMAND waterfall_time_markers_test)
 
 add_executable(waterfall_history_buffer_test
     tests/waterfall_history_buffer_test.cpp
@@ -5022,6 +5117,9 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    audio_engine_rates_test
+    audio_engine_pcm_lifetime_test
+    pcm_compatibility_test
     firmware_close_dialog_test
     atu_seam_gate_test
     backend_capability_revision_test
@@ -5030,6 +5128,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tx_operation_integration_test
     tx_audio_context_test
     backend_slice_lifecycle_test
+    waterfall_time_marker_settings_test
     client_display_settings_test
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
