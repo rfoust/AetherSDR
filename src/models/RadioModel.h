@@ -854,6 +854,10 @@ public:
     bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     void requestProducerPttOff(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     void abortProducerPtt(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    bool requestProducerTune(const TxCoordinator::Request& request, bool on, bool twoTone = false);
+    bool requestProducerAtu(const TxCoordinator::Request& request, bool start);
+    bool requestProducerCwx(const TxCoordinator::Request& request, const QString& text);
+    void abortProducerCwx(const TxCoordinator::Request& request);
     // Best-effort stop of this captured compatibility operation only. This is
     // not a cancellation/recovery acknowledgment or proof that RF has stopped.
     void requestTransmitStop(const TxCoordinator::Operation& operation);
@@ -1815,11 +1819,20 @@ private:
     quint64 m_txCommandEpoch{0};
     quint64 m_tuneCommandEpoch{0};
     quint64 m_atuCommandEpoch{0};
+    TxCoordinator::Intent m_atuCommandIntent; // captured before synchronous readback notifications
+    TxCoordinator::Intent m_cwxCommandIntent;
+    TxCoordinator::Operation m_cwxCommandOperation;
+    unsigned m_cwxPendingDeliveries{0};
+    bool m_cwxHandoffComplete{false};
     std::atomic<quint64> m_cwInputSession{0};
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
     bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
+    TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
+                                                  TxActivity activity, bool& dispatched);
+    bool dispatchTuneIntent(bool on, const TxCoordinator::Request* request = nullptr);
+    bool dispatchAtuIntent(bool start, const TxCoordinator::Request* request = nullptr);
     bool setTransmitImpl(bool tx, TransmitModel::PttSource source,
                          const TxCoordinator::Request* request, bool alreadyClosing = false);
     void endLocalTxActivity(const TxCoordinator::Intent& intent);
@@ -1830,7 +1843,13 @@ private:
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
     TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
                                            std::function<void()> finished = {});
-    void sendCwxCommand(const QString& command, bool keying, ResponseCallback reply = {});
+    void sendCwxCommand(const QString& command, bool keying,
+                        const TxCoordinator::Operation& operation, ResponseCallback reply = {});
+    void dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
+                            int epoch = -1, int nChars = -1);
+    bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
+    void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
+    TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
     void applyBackendTransmitDelta(const TransmitDelta& delta);

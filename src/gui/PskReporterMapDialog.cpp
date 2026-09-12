@@ -1735,6 +1735,10 @@ void PskReporterMapDialog::updateBeaconState()
         || m_radioModel == nullptr) {
         return;
     }
+    if (!m_beaconRequest.valid()) {
+        stopBeacon(tr("Stopped: original TX request is no longer valid"));
+        return;
+    }
 
     WsprBeacon* beacon = m_audioEngine->wsprBeacon();
     if (m_beaconTransmitting) {

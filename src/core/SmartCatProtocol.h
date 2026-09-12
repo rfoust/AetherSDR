@@ -180,6 +180,7 @@ private:
     RadioModel* m_model;
     TxCoordinator::Producer m_txProducer;
     TxCoordinator::Request m_pttRequest;
+    TxCoordinator::Request m_cwxRequest;
     int         m_vfoA{0};
     int         m_vfoB{-1};
     bool        m_flexExtensions{true};

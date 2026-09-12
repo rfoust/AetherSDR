@@ -2295,23 +2295,7 @@ RadioModel::RadioModel(QObject* parent)
     // BYPASS remains unconditional, including after a refused start (#5558).
     connect(&m_transmitModel, &TransmitModel::atuCommandIssued, this,
             [this](bool start) {
-        ++m_atuCommandEpoch;
-        const TxCoordinator::Operation operation = m_txOperation;
-        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Atu);
-        if (!start) {
-            (void)m_txCoordinator.requestIntentEnd(intent);
-        }
-        if (start) {
-            m_transmitModel.noteActivePttSource(TransmitModel::PttSource::Atu);
-            armInterlockNotification(TransmitModel::PttSource::Atu);
-            applyTuneInhibit();
-        }
-        if (m_backend && (!start || operation.permitsDispatch(txMonotonicMs()))) {
-            m_backend->setAtu(start, start ? operation : m_txCoordinator.cleanupFence(), trackTxQueue(operation));
-        }
-        if (!start) {
-            endLocalTxActivity(intent);
-        }
+        dispatchAtuIntent(start);
     });
     connect(&m_transmitModel, &TransmitModel::speechProcessorCommandIssued, this,
             [this](bool on, int level) {
@@ -2325,26 +2309,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
             [this](bool on) {
-        const quint64 commandEpoch = ++m_tuneCommandEpoch;
-        const TxCoordinator::Operation operation = m_txOperation;
-        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Tune);
-        if (!on) {
-            (void)m_txCoordinator.requestIntentEnd(intent);
-        }
-        if (on) {
-            armInterlockNotification(m_transmitModel.activePttSource());
-            applyTuneInhibit();
-        }
-        if (m_backend && (!on || operation.permitsDispatch(txMonotonicMs()))) {
-            m_backend->setTune(on, m_transmitModel.tunePower(),
-                               on ? operation : m_txCoordinator.cleanupFence(), trackTxQueue(operation));
-            if (commandEpoch == m_tuneCommandEpoch) {
-                publishCommandedBackendTransmitEdge(on);
-            }
-        }
-        if (!on) {
-            endLocalTxActivity(intent);
-        }
+        dispatchTuneIntent(on);
     });
 
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
@@ -2529,25 +2494,7 @@ RadioModel::RadioModel(QObject* parent)
         return [intent] { return intent.permitsDispatch(txMonotonicMs()); };
     });
     connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
-        // Non-Flex text keyers consume the neutral transmissionRequested /
-        // transmissionCancelled signals below. Do not feed their operation
-        // through sendCmd(), whose deliberately unsupported reply would make
-        // CWX report a false send failure even when CI-V accepted the text.
-        if (!usesFlexCommandPlane())
-            return;
-        // Track CWX send state so the interlock handler recognises local
-        // CWX TX and doesn't force the audio gate off. (#2047, #2097)
-        if (cmd.startsWith("cwx send") || cmd.startsWith("cwx macro send")) {
-            m_cwxActive = true;
-            sendCwxCommand(cmd, true);
-            return;
-        } else if (cmd.startsWith("cwx clear")) {
-            m_cwxActive = false;
-            m_cwxDrainArmed = false;  // ESC/clear aborts the drain watch (#3949)
-            sendCwxCommand(cmd, false);
-            return;
-        }
-        sendCmd(cmd);
+        dispatchCwxCommand(cmd, m_cwxCommandOperation);
     });
     connect(&m_cwxModel, &CwxModel::speedCommandIssued, this, [this](int wpm) {
         if (!usesFlexCommandPlane()) {
@@ -2555,52 +2502,25 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
     m_cwxModel.setTextSender([this](const QString& text, int wpm) {
-        if (usesFlexCommandPlane()) {
-            return true;
-        }
-        if (!m_backend || !backendCapabilities().hasRadioSideCwKeyer) {
-            return false;
-        }
         Q_UNUSED(wpm);
-        const TxCoordinator::Operation operation = m_txOperation.withKeyingPermit(
-            m_cwxModel.queuedTransmissionPermit());
-        const QString rejection = m_backend->sendCwText(text, operation, trackTxQueue(operation));
-        if (!rejection.isEmpty()) {
-            emit radioMessageReceived(
-                tr("CW text not sent: %1").arg(rejection),
-                MessageSeverity::Warning);
-        }
-        return rejection.isEmpty();
+        return dispatchCwxText(text, m_cwxCommandOperation);
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
-        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Cwx);
+        const TxCoordinator::Intent intent = m_cwxCommandIntent;
+        const TxCoordinator::Operation operation = m_cwxCommandOperation;
         (void)m_txCoordinator.requestIntentEnd(intent);
         m_cwxActive = false;
         m_cwxDrainArmed = false;
         if (m_backend && !usesFlexCommandPlane()
             && backendCapabilities().hasRadioSideCwKeyer) {
-            m_backend->abortCwText(m_txCoordinator.cleanupFence(), trackTxQueue(m_txOperation));
+            m_backend->abortCwText(operation.permitsCleanup() ? operation : m_txCoordinator.cleanupFence(),
+                                   trackTxQueue(operation));
         }
         endLocalTxActivity(intent);
     });
     connect(&m_cwxModel, &CwxModel::transmissionDispatched, this,
             [this](int epoch, bool untrackedMacro) {
-        if (epoch != m_cwxModel.drainEpoch()) {
-            return;
-        }
-        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Cwx);
-        if (!usesFlexCommandPlane() || untrackedMacro) {
-            // CI-V has no text-progress readback, and an unsynced Flex macro
-            // has no client-side end index. Complete only the local handoff.
-            // This must never become another client's radio-idle authority.
-            if (untrackedMacro && m_cwxDrainArmed) {
-                // An unknown-length tail appended to a tracked batch makes
-                // that old end index incomplete. Don't let it cut off the tail.
-                m_cwxDrainArmed = false;
-                m_cwxModel.abandonDrainWatch();
-            }
-            endLocalTxActivity(intent);
-        }
+        finishCwxDispatch(epoch, untrackedMacro, m_cwxCommandIntent);
     });
     // Final cwx send of each macro/text block goes via replyCommandReady so we
     // can capture the radio_index from the reply.  CwxModel::handleSendReply
@@ -2608,21 +2528,7 @@ RadioModel::RadioModel(QObject* parent)
     // This replaces the broken cwx queue= path — firmware never sends it
     // (observed on FLEX-6500 fw 4.2.20.41343; the 8600 target runs 4.2.18). (#3949)
     connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
-        if (!usesFlexCommandPlane())
-            return;
-        m_cwxActive = true;
-        // Arm the drain-release latch. Unlike m_cwxActive (which the interlock
-        // handler clears on every TRANSMITTING→READY flicker during a macro),
-        // m_cwxDrainArmed is owned solely by the CWX send/drain lifecycle, so
-        // the queueEmpty release below survives QSK break-in flicker. (#3949)
-        m_cwxDrainArmed = true;
-        const TxCoordinator::Operation operation = m_txOperation;
-        sendCwxCommand(cmd, true, [this, operation, epoch, nChars](int respVal, const QString& body){
-            if (operation.sameOperation(m_txOperation)
-                && operation.permitsDispatch(txMonotonicMs())) {
-                m_cwxModel.handleSendReply(respVal, body, epoch, nChars);
-            }
-        });
+        dispatchCwxCommand(cmd, m_cwxCommandOperation, epoch, nChars);
     });
     // When the radio signals its CWX buffer is drained, release TX. (#2450)
     // The radio's break-in timer fires but sync_cwx=1 still requires an
@@ -2639,7 +2545,7 @@ RadioModel::RadioModel(QObject* parent)
         if (!m_cwxDrainArmed) return;
         m_cwxDrainArmed = false;
         m_cwxActive = false;
-        endLocalTxActivity(m_localTxIntents.value(TxActivity::Cwx));
+        endLocalTxActivity(m_cwxCommandIntent);
         if (!m_txCoordinator.hasIntents(m_txOperation)) {
             m_transmitModel.setMox(false);
         }
@@ -4615,7 +4521,7 @@ bool RadioModel::refuseKeyWithInterlock(const QString& message, const QString& k
 void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
 {
     const TxCoordinator::Operation operation = m_txOperation;
-    const TxCoordinator::Intent atuIntent = m_localTxIntents.value(TxActivity::Atu);
+    const TxCoordinator::Intent atuIntent = m_atuCommandIntent;
     const quint64 atuEpoch = m_atuCommandEpoch;
     // Backend MOX is radio state, not local intent; don't echo it into the
     // signal that drives this client's audio, DAX, recorder and serial PTT.
@@ -4684,6 +4590,13 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
     }
     TxCoordinator::Intent intent;
     if (request && !tx) {
+        const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(*request);
+        if (!bound.isActivity(TxActivity::Mox)) {
+            if (!bound.pending()) {
+                (void)m_txCoordinator.closeRequest(*request);
+            }
+            return false;
+        }
         intent = alreadyClosing ? m_txCoordinator.requestIntent(*request)
                                 : m_txCoordinator.closeRequest(*request);
         if (!intent.pending()) {

@@ -151,6 +151,7 @@ public:
         [[nodiscard]] bool pending() const;
         [[nodiscard]] bool permitsDispatch(qint64 monotonicMs) const;
         [[nodiscard]] bool sameIntent(const Intent& other) const;
+        [[nodiscard]] bool isActivity(Activity activity) const;
     private:
         friend class TxCoordinator;
         std::shared_ptr<IntentState> m_state;
@@ -222,7 +223,8 @@ public:
     // Close admission immediately, including for an off received before its
     // queued on. The original intent stays alive for its normal queued tail.
     [[nodiscard]] Intent closeRequest(const Request& request);
-    [[nodiscard]] bool hasOtherIntents(const Operation& operation, const Intent& excluded) const;
+    [[nodiscard]] bool hasOtherIntents(const Operation& operation, const Intent& excluded,
+                                        unsigned activities = 0) const;
     [[nodiscard]] Admission acquire(const Actor& actor, qint64 monotonicMs);
     // Repeated admission by the same producer reuses its live handle; it does
     // not accumulate reference-counted holds. Distinct producers use distinct

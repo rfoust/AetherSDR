@@ -66,9 +66,19 @@ public:
     // sidetone notification; the radio-specific command path stays separate.
     using TextSender = std::function<bool(const QString&, int)>;
     void setTextSender(TextSender sender) { m_textSender = std::move(sender); }
+    // Explicit synchronous route for an engine producer. Every command keeps
+    // the request captured by that controller; no temporary ambient identity
+    // is installed around UI signals or a nested event loop.
+    struct TransmissionRoute {
+        TransmissionAdmission admit;
+        TextSender text;
+        std::function<void(const QString&, int, int)> command; // nChars < 0: no reply
+        std::function<void(int, bool)> dispatched;
+    };
 
     // Actions
     void send(const QString& text);      // Send mode: full string
+    void send(const QString& text, const TransmissionRoute& route);
     void sendChar(const QString& ch);    // Live mode: single char
     void sendMacro(int idx);             // 1-based (1=F1, 12=F12)
     void saveMacro(int idx, const QString& text); // 0-based
@@ -148,12 +158,17 @@ signals:
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
-    TransmissionPermit admitTransmission();
-    void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit);
-    bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit);
+    TransmissionPermit admitTransmission(const TransmissionRoute& route = {});
+    void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit,
+                          const TransmissionRoute& route = {});
+    bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit,
+                            const TransmissionRoute& route = {});
+    void dispatchCommand(const QString& command, int epoch, int nChars,
+                         const TransmissionRoute& route);
     SendAvailability m_sendAvailability;
     TransmissionAdmission m_transmissionAdmission;
     TextSender m_textSender;
+    bool m_clearing{false}; // synchronous abort notifications cannot replace the queue being cleared
     std::shared_ptr<std::atomic<bool>> m_queueValid{std::make_shared<std::atomic<bool>>(true)};
 
     int     m_speed{20};

@@ -272,6 +272,16 @@ public:
     // keying signal; a standalone model has no transport to authorize.
     using KeyingPermit = std::function<bool()>;
     using KeyingAdmission = std::function<KeyingPermit(KeyingIntent, bool)>;
+    // A trusted engine controller binds a producer before entering the model.
+    // These callbacks preserve the model's preflight and optimistic UI path
+    // without installing an ambient caller identity around a widget callback.
+    struct KeyingRoute {
+        std::function<KeyingPermit(bool)> admit;
+        std::function<void(bool)> dispatch;
+    };
+    void requestTune(PttSource source, bool twoTone, const KeyingRoute& route);
+    void stopTune(const KeyingRoute& route);
+    void requestAtu(bool start, const KeyingRoute& route);
     void setKeyingAdmission(KeyingAdmission admission) { m_keyingAdmission = std::move(admission); }
     void requestPttOn(PttSource source, std::function<KeyingPermit()> admit,
                       std::function<void()> engage);

@@ -78,6 +78,13 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
+    if (!bound.isActivity(TxActivity::Mox)) {
+        if (!bound.pending()) {
+            (void)m_txCoordinator.closeRequest(request);
+        }
+        return;
+    }
     const TxCoordinator::Intent intent = m_txCoordinator.closeRequest(request);
     if (!intent.pending()) {
         return;
@@ -109,6 +116,13 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
     if (QThread::currentThread() != thread()) {
         return;
     }
+    const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
+    if (!bound.isActivity(TxActivity::Mox)) {
+        if (!bound.pending()) {
+            (void)m_txCoordinator.closeRequest(request);
+        }
+        return;
+    }
     (void)m_txCoordinator.closeRequest(request);
     const TxCoordinator::Intent intent = m_txCoordinator.requestIntent(request);
     if (intent.pending()) {
@@ -127,6 +141,16 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
 {
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
         return false;
+    }
+    if (activity == TxActivity::Tune || activity == TxActivity::Atu || activity == TxActivity::Cwx) {
+        const TxCoordinator::Intent previous = request ? m_txCoordinator.requestIntent(*request)
+            : m_localTxIntents.value(activity);
+        // These are singleton generators/queues, unlike compatible MOX contributors.
+        // Replacing another producer's latch/context would silently transfer
+        // ownership; a new caller must submit fresh intent after it finishes.
+        if (m_txCoordinator.hasOtherIntents(m_txOperation, previous, static_cast<unsigned>(activity))) {
+            return false;
+        }
     }
     if (m_txSessionClosing) {
         emitInterlockNotification(tr("Transmit is unavailable while the radio disconnects."),
@@ -220,10 +244,165 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     if (!request) {
         m_localTxIntents.insert(activity, intent);
     }
+    if (activity == TxActivity::Cwx) {
+        if (!intent.sameIntent(m_cwxCommandIntent)) {
+            m_cwxPendingDeliveries = 0;
+            m_cwxHandoffComplete = false;
+        }
+        m_cwxCommandIntent = intent;
+        m_cwxCommandOperation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
+    }
     m_txOperationActivities |= static_cast<unsigned>(activity);
     m_backend->setTransmitContext(m_txCoordinator.mediaContext(m_backendTxProducer,
         request ? m_txCoordinator.requestOperation(*request) : m_txOperation));
     return true;
+}
+
+TransmitModel::KeyingRoute RadioModel::producerKeyingRoute(const TxCoordinator::Request& request,
+                                                          TxActivity activity, bool& dispatched)
+{
+    return {
+        [this, request, activity](bool on) -> TransmitModel::KeyingPermit {
+            if (on) {
+                if (!beginTxActivity(activity, &request)) {
+                    return {};
+                }
+                const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+                return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
+            }
+            const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(request);
+            if (!bound.isActivity(activity)) {
+                if (!bound.pending()) {
+                    (void)m_txCoordinator.closeRequest(request);
+                }
+                return {};
+            }
+            const TxCoordinator::Intent intent = m_txCoordinator.closeRequest(request);
+            if (!intent.pending()) {
+                return {};
+            }
+            const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+            if (m_txCoordinator.hasOtherIntents(operation, intent, static_cast<unsigned>(activity))) {
+                endLocalTxActivity(intent);
+                return {};
+            }
+            return [operation, intent] { return operation.permitsCleanup() && intent.pending(); };
+        },
+        [this, request, activity, &dispatched](bool on) {
+            if (activity == TxActivity::Tune) {
+                dispatched = dispatchTuneIntent(on, &request);
+            } else {
+                dispatched = dispatchAtuIntent(on, &request);
+            }
+        }};
+}
+
+bool RadioModel::requestProducerTune(const TxCoordinator::Request& request, bool on, bool twoTone)
+{
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    bool dispatched = false;
+    const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Tune, dispatched);
+    if (on) {
+        m_transmitModel.requestTune(TransmitModel::PttSource::Tune, twoTone, route);
+    } else {
+        m_transmitModel.stopTune(route);
+    }
+    const bool accepted = dispatched;
+    if (on && !accepted) {
+        m_transmitModel.stopTune(route); // retire even a partially admitted request
+    }
+    return accepted;
+}
+
+bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool start)
+{
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    bool dispatched = false;
+    const TransmitModel::KeyingRoute route = producerKeyingRoute(request, TxActivity::Atu, dispatched);
+    m_transmitModel.requestAtu(start, route);
+    const bool accepted = dispatched;
+    if (start && !accepted) {
+        m_transmitModel.requestAtu(false, route);
+    }
+    return accepted;
+}
+
+bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* request)
+{
+    const quint64 commandEpoch = ++m_tuneCommandEpoch;
+    const TxCoordinator::Operation operation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
+    const TxCoordinator::Intent intent = request ? m_txCoordinator.requestIntent(*request)
+        : m_localTxIntents.value(TxActivity::Tune);
+    if (!on && !request) {
+        (void)m_txCoordinator.requestIntentEnd(intent);
+    }
+    if (on) {
+        armInterlockNotification(m_transmitModel.activePttSource());
+        applyTuneInhibit();
+    }
+    const TxCoordinator::Operation cleanup = request ? operation : m_txCoordinator.cleanupFence();
+    bool releaseQueued = false;
+    bool dispatched = false;
+    if (m_backend && commandEpoch == m_tuneCommandEpoch
+        && (on ? operation.permitsDispatch(txMonotonicMs()) : cleanup.permitsCleanup())) {
+        const QPointer<RadioModel> receiver(this);
+        const auto finished = request && !on ? std::function<void()>([receiver, intent] {
+            if (receiver) {
+                receiver->endLocalTxActivity(intent);
+            }
+        }) : std::function<void()>{};
+        releaseQueued = request && !on;
+        dispatched = true;
+        m_backend->setTune(on, m_transmitModel.tunePower(), on ? operation : cleanup,
+                           trackTxQueue(operation, finished));
+        if (commandEpoch == m_tuneCommandEpoch) {
+            publishCommandedBackendTransmitEdge(on);
+        }
+    }
+    if (!on && !releaseQueued) {
+        endLocalTxActivity(intent);
+    }
+    return dispatched;
+}
+
+bool RadioModel::dispatchAtuIntent(bool start, const TxCoordinator::Request* request)
+{
+    const quint64 commandEpoch = ++m_atuCommandEpoch;
+    const TxCoordinator::Operation operation = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
+    const TxCoordinator::Intent intent = request ? m_txCoordinator.requestIntent(*request)
+        : m_localTxIntents.value(TxActivity::Atu);
+    if (!start && !request) {
+        (void)m_txCoordinator.requestIntentEnd(intent);
+    }
+    if (start) {
+        m_transmitModel.noteActivePttSource(TransmitModel::PttSource::Atu);
+        armInterlockNotification(TransmitModel::PttSource::Atu);
+        applyTuneInhibit();
+    }
+    const TxCoordinator::Operation cleanup = request ? operation : m_txCoordinator.cleanupFence();
+    bool releaseQueued = false;
+    bool dispatched = false;
+    if (m_backend && commandEpoch == m_atuCommandEpoch
+        && (start ? operation.permitsDispatch(txMonotonicMs()) : cleanup.permitsCleanup())) {
+        m_atuCommandIntent = intent;
+        const QPointer<RadioModel> receiver(this);
+        const auto finished = request && !start ? std::function<void()>([receiver, intent] {
+            if (receiver) {
+                receiver->endLocalTxActivity(intent);
+            }
+        }) : std::function<void()>{};
+        releaseQueued = request && !start;
+        dispatched = true;
+        m_backend->setAtu(start, start ? operation : cleanup, trackTxQueue(operation, finished));
+    }
+    if (!start && !releaseQueued) {
+        endLocalTxActivity(intent);
+    }
+    return dispatched;
 }
 
 void RadioModel::endLocalTxActivity(const TxCoordinator::Intent& intent)
@@ -325,12 +504,155 @@ void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator
     }
 }
 
-void RadioModel::sendCwxCommand(const QString& command, bool keying, ResponseCallback reply)
+bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const QString& text)
 {
-    const TxCoordinator::Operation operation = m_txOperation;
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    if (!cwTextValidationError(text).isEmpty()) {
+        abortProducerCwx(request);
+        return false;
+    }
+    bool admitted = false;
+    m_cwxModel.send(text, {
+        [this, request, &admitted]() -> CwxModel::TransmissionPermit {
+            if (!beginTxActivity(TxActivity::Cwx, &request)) {
+                return {};
+            }
+            admitted = true;
+            const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+            return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
+        },
+        [this, request](const QString& value, int) {
+            return dispatchCwxText(value, m_txCoordinator.requestOperation(request));
+        },
+        [this, request](const QString& command, int epoch, int nChars) {
+            dispatchCwxCommand(command, m_txCoordinator.requestOperation(request), epoch, nChars);
+        },
+        [this, request](int epoch, bool untrackedMacro) {
+            finishCwxDispatch(epoch, untrackedMacro, m_txCoordinator.requestIntent(request));
+        }});
+    if (!admitted) {
+        abortProducerCwx(request);
+    }
+    return admitted;
+}
+
+void RadioModel::abortProducerCwx(const TxCoordinator::Request& request)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    const TxCoordinator::Intent intent = m_txCoordinator.requestIntent(request);
+    if (!intent.isActivity(TxActivity::Cwx)) {
+        if (!intent.pending()) {
+            (void)m_txCoordinator.closeRequest(request);
+        }
+        return;
+    }
+    const TxCoordinator::Intent closed = m_txCoordinator.closeRequest(request);
+    const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+    if (closed.isActivity(TxActivity::Cwx) && operation.permitsCleanup()
+        && intent.sameIntent(m_cwxCommandIntent)) {
+        // This includes the unacknowledged radio-side text tail after local
+        // handoff, but never a replacement producer's queue, even in one over.
+        m_cwxModel.clearBuffer();
+    }
+}
+
+void RadioModel::dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
+                                    int epoch, int nChars)
+{
+    if (!usesFlexCommandPlane()) {
+        return;
+    }
+    if (command.startsWith("cwx send") || command.startsWith("cwx macro send")) {
+        if (!operation.permitsDispatch(txMonotonicMs())) {
+            return;
+        }
+        m_cwxActive = true;
+        if (nChars >= 0) {
+            // The epoch and original producer survive QSK gaps and nested
+            // notifications; an earlier reply cannot adopt a new text batch.
+            m_cwxDrainArmed = true;
+            sendCwxCommand(command, true, operation,
+                [this, operation, epoch, nChars](int result, const QString& body) {
+                    if (operation.permitsDispatch(txMonotonicMs())) {
+                        m_cwxModel.handleSendReply(result, body, epoch, nChars);
+                    }
+                });
+        } else {
+            sendCwxCommand(command, true, operation);
+        }
+    } else if (command.startsWith("cwx clear")) {
+        m_cwxActive = false;
+        m_cwxDrainArmed = false;
+        sendCwxCommand(command, false, operation);
+    } else {
+        sendCmd(command);
+    }
+}
+
+bool RadioModel::dispatchCwxText(const QString& text, TxCoordinator::Operation original)
+{
+    if (usesFlexCommandPlane()) {
+        return true;
+    }
+    if (!m_backend || !backendCapabilities().hasRadioSideCwKeyer
+        || !original.permitsDispatch(txMonotonicMs())) {
+        return false;
+    }
+    const TxCoordinator::Operation operation = original.withKeyingPermit(m_cwxModel.queuedTransmissionPermit());
+    const QString rejection = m_backend->sendCwText(text, operation, trackCwxQueue(operation));
+    if (!rejection.isEmpty()) {
+        emit radioMessageReceived(tr("CW text not sent: %1").arg(rejection), MessageSeverity::Warning);
+    }
+    return rejection.isEmpty();
+}
+
+void RadioModel::finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent)
+{
+    if (epoch != m_cwxModel.drainEpoch() || !intent.sameIntent(m_cwxCommandIntent)) {
+        return;
+    }
+    if (!usesFlexCommandPlane() || untrackedMacro) {
+        // CI-V and unknown-length Flex macros have no qualified drain index.
+        // This is local queue handoff, never proof of radio-idle or recovery.
+        if (untrackedMacro && m_cwxDrainArmed) {
+            m_cwxDrainArmed = false;
+            m_cwxModel.abandonDrainWatch();
+        }
+        m_cwxHandoffComplete = true;
+        if (m_cwxPendingDeliveries == 0) {
+            endLocalTxActivity(intent);
+        }
+    }
+}
+
+TxCoordinator::Completion RadioModel::trackCwxQueue(const TxCoordinator::Operation& operation)
+{
+    const TxCoordinator::Intent intent = m_cwxCommandIntent;
+    ++m_cwxPendingDeliveries;
+    const QPointer<RadioModel> receiver(this);
+    return trackTxQueue(operation, [receiver, intent] {
+        if (!receiver || !intent.sameIntent(receiver->m_cwxCommandIntent)
+            || receiver->m_cwxPendingDeliveries == 0) {
+            return;
+        }
+        --receiver->m_cwxPendingDeliveries;
+        if (receiver->m_cwxHandoffComplete && receiver->m_cwxPendingDeliveries == 0) {
+            receiver->endLocalTxActivity(intent);
+        }
+    });
+}
+
+void RadioModel::sendCwxCommand(const QString& command, bool keying,
+                                const TxCoordinator::Operation& operation, ResponseCallback reply)
+{
     const TxCoordinator::Operation fence = keying || operation.permitsCleanup()
         ? operation : m_txCoordinator.cleanupFence();
-    const auto consumed = trackTxDelivery(operation);
+    const TxCoordinator::Completion completion = trackCwxQueue(operation);
+    const auto consumed = [completion] { completion.finish(); };
     // An ESC must cancel queued text even while a separate MOX intent keeps
     // the shared desktop operation alive. Never read CwxModel on the worker.
     const auto batch = m_cwxModel.queuedTransmissionPermit();
@@ -403,6 +725,11 @@ void RadioModel::resetTxOperations()
     m_txCoordinator.reset();
     m_cwxModel.resetDrainWatch();
     m_localTxIntents.clear();
+    m_atuCommandIntent = {};
+    m_cwxCommandIntent = {};
+    m_cwxCommandOperation = {};
+    m_cwxPendingDeliveries = 0;
+    m_cwxHandoffComplete = false;
 }
 
 void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceId,

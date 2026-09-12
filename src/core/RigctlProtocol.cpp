@@ -234,8 +234,9 @@ RigctlProtocol::~RigctlProtocol()
 {
     m_txProducer.invalidate(); // fences queued key-on before any teardown callback
     if (m_model) {
-        QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest] {
+        QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest, cwx = m_cwxRequest] {
             (void)model->setProducerTransmit(request, false);
+            model->abortProducerCwx(cwx);
         }, Qt::QueuedConnection);
     }
     // Client dropped without a clean set_split_vfo 0 (e.g. WSJT-X quit): best-effort
@@ -1755,8 +1756,12 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
     // CwxModel::transmissionRequested) fires alongside the radio command.
     // Going through sendCmdPublic directly would silently bypass the
     // sidetone path used by the MIDI key and CWX panel. (#2909)
-    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
-        model->cwxModel().send(text);
+    if (!m_cwxRequest.valid()) {
+        m_cwxRequest = m_txProducer.request();
+    }
+    const TxCoordinator::Request request = m_cwxRequest;
+    QMetaObject::invokeMethod(m_model, [model = m_model, text, request]() {
+        model->requestProducerCwx(request, text);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -1770,8 +1775,10 @@ QString RigctlProtocol::cmdStopMorse()
     if (!m_model->hasRadioSideCwKeyer()) return rprt(-11);
     // CwxModel::clearBuffer emits transmissionCancelled, which cuts any
     // in-flight local sidetone in addition to sending "cwx clear". (#2909)
-    QMetaObject::invokeMethod(m_model, [model = m_model]() {
-        model->cwxModel().clearBuffer();
+    const TxCoordinator::Request request = m_cwxRequest;
+    m_cwxRequest = {};
+    QMetaObject::invokeMethod(m_model, [model = m_model, request]() {
+        model->abortProducerCwx(request);
     }, Qt::QueuedConnection);
     return rprt(0);
 }

@@ -165,6 +165,11 @@ bool TxCoordinator::Intent::sameIntent(const Intent& other) const
     return m_state && m_state == other.m_state;
 }
 
+bool TxCoordinator::Intent::isActivity(Activity activity) const
+{
+    return m_state && m_state->activity == activity;
+}
+
 bool TxCoordinator::Producer::valid() const
 {
     if (!m_state || !m_state->valid.load(std::memory_order_acquire)) {
@@ -410,11 +415,13 @@ TxCoordinator::Intent TxCoordinator::closeRequest(const Request& request)
     return intent;
 }
 
-bool TxCoordinator::hasOtherIntents(const Operation& operation, const Intent& excluded) const
+bool TxCoordinator::hasOtherIntents(const Operation& operation, const Intent& excluded,
+                                     unsigned activities) const
 {
     return onThread() && std::any_of(m_intents.begin(), m_intents.end(),
-        [&operation, &excluded](const std::shared_ptr<IntentState>& intent) {
+        [&operation, &excluded, activities](const std::shared_ptr<IntentState>& intent) {
             return intent != excluded.m_state && !intent->ended.load(std::memory_order_acquire)
+                && (activities == 0 || (activities & static_cast<unsigned>(intent->activity)))
                 && intent->operation.sameOperation(operation);
         });
 }

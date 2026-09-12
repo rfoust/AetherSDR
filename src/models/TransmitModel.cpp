@@ -365,6 +365,16 @@ void TransmitModel::setTuneAvailable(bool available)
 
 void TransmitModel::startTune(PttSource source)
 {
+    requestTune(source, false, {});
+}
+
+void TransmitModel::startTwoToneTune(PttSource source)
+{
+    requestTune(source, true, {});
+}
+
+void TransmitModel::requestTune(PttSource source, bool twoTone, const KeyingRoute& route)
+{
     if (!m_tuneAvailable) {
         return;
     }
@@ -374,8 +384,9 @@ void TransmitModel::startTune(PttSource source)
     if (!tuneAdmitted()) {
         return;
     }
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
-    if (m_keyingAdmission && (!permit || !permit())) {
+    const KeyingPermit permit = route.admit ? route.admit(true)
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
+    if ((route.admit || m_keyingAdmission) && (!permit || !permit())) {
         return;
     }
     const quint64 intentEpoch = ++m_tuneIntentEpoch;
@@ -385,6 +396,12 @@ void TransmitModel::startTune(PttSource source)
     // every software path as source=SW). Without this, tune inherits the stale
     // Mox tag and wrongly runs the operator-only timer. (#4131 review)
     m_activePttSource = source;
+    if (twoTone) {
+        setTuneMode(QStringLiteral("two_tone"));
+        if (intentEpoch != m_tuneIntentEpoch || (permit && !permit())) {
+            return;
+        }
+    }
 
     // Optimistic tune state, exactly as setMox() does for m_transmitting.
     //
@@ -399,38 +416,11 @@ void TransmitModel::startTune(PttSource source)
         emit tuneChanged(true);
     }
     if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
-        emit tuneCommandIssued(true);
-    }
-}
-
-void TransmitModel::startTwoToneTune(PttSource source)
-{
-    if (!m_tuneAvailable) {
-        return;
-    }
-    if (!runPttPreflight(source, false)) {
-        return;
-    }
-    if (!tuneAdmitted()) {
-        return;
-    }
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
-    if (m_keyingAdmission && (!permit || !permit())) {
-        return;
-    }
-    const quint64 intentEpoch = ++m_tuneIntentEpoch;
-
-    m_activePttSource = source;   // exclude local/TCI/DAX tune (see startTune, #4131)
-    setTuneMode("two_tone");
-    if (intentEpoch != m_tuneIntentEpoch || (permit && !permit())) {
-        return;
-    }
-    if (!m_tune) {
-        m_tune = true;
-        emit tuneChanged(true);
-    }
-    if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
-        emit tuneCommandIssued(true);
+        if (route.dispatch) {
+            route.dispatch(true);
+        } else {
+            emit tuneCommandIssued(true);
+        }
     }
 }
 
@@ -451,14 +441,27 @@ void TransmitModel::toggleTwoToneTune()
 
 void TransmitModel::stopTune()
 {
+    stopTune({});
+}
+
+void TransmitModel::stopTune(const KeyingRoute& route)
+{
+    const KeyingPermit permit = route.admit ? route.admit(false)
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, false) : KeyingPermit{};
+    if (route.admit && (!permit || !permit())) {
+        return;
+    }
     const quint64 intentEpoch = ++m_tuneIntentEpoch;
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, false) : KeyingPermit{};
     if (m_tune) {
         m_tune = false;
         emit tuneChanged(false);
     }
     if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
-        emit tuneCommandIssued(false);
+        if (route.dispatch) {
+            route.dispatch(false);
+        } else {
+            emit tuneCommandIssued(false);
+        }
     }
 }
 
@@ -503,16 +506,26 @@ void TransmitModel::setTransmitting(bool tx)
 
 void TransmitModel::atuStart()
 {
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
-    if (m_keyingAdmission && (!permit || !permit())) {
-        return;
-    }
-    emit atuCommandIssued(true);
+    requestAtu(true, {});
 }
 
 void TransmitModel::atuBypass()
 {
-    emit atuCommandIssued(false);
+    requestAtu(false, {});
+}
+
+void TransmitModel::requestAtu(bool start, const KeyingRoute& route)
+{
+    const KeyingPermit permit = route.admit ? route.admit(start)
+        : start && m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
+    if ((route.admit || (start && m_keyingAdmission)) && (!permit || !permit())) {
+        return;
+    }
+    if (route.dispatch) {
+        route.dispatch(start);
+    } else {
+        emit atuCommandIssued(start);
+    }
 }
 
 void TransmitModel::setAtuMemories(bool on)

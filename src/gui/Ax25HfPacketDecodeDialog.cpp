@@ -2408,6 +2408,10 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         finishTransmit(true, QStringLiteral("audio engine or radio model disappeared before TX"));
         return;
     }
+    if (!m_txRequest.valid()) {
+        finishTransmit(true, QStringLiteral("original TX request is no longer valid"));
+        return;
+    }
     const bool bypassesDax = txAudioBypassesDax();
     if (!bypassesDax && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;

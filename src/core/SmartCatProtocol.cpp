@@ -539,7 +539,9 @@ void SmartCatProtocol::releasePtt()
     m_pttRequest = {};
     if (m_model) {
         (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
+        m_model->abortProducerCwx(m_cwxRequest);
     }
+    m_cwxRequest = {};
 }
 
 // ── ID — rig identification ───────────────────────────────────────────────────
@@ -1041,7 +1043,10 @@ QString SmartCatProtocol::cmdKY(const QString& arg)
         return "?;";
     }
     if (!text.isEmpty()) {
-        m_model->cwxModel().send(text);
+        if (!m_cwxRequest.valid()) {
+            m_cwxRequest = m_txProducer.request();
+        }
+        m_model->requestProducerCwx(m_cwxRequest, text);
     }
     return {};
 }

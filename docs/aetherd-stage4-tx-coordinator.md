@@ -70,12 +70,28 @@ existing interlocks/cleanup, not release authority. The historical operation
 activity mask still records which radio-buffered paths might need cleanup.
 
 The compatibility slots remain for not-yet-converted local activity entry
-points. CAT PTT and TCI now retain separate accepted-session producer handles.
+points. CAT PTT/CW text and TCI now retain separate accepted-session producer handles.
 Serial/PTY CAT uses its configured endpoint lifetime, not a guessed process ID.
 AX.25 and WSPR retain their controller lifetime and a request for each scheduled
 transmission. Bridge authorization-lifetime and other local-keyer conversions
 remain separate work; a short-lived MCP request socket is not a TX producer.
 Normal tail consumption remains local bookkeeping, never radio-stop proof.
+
+Explicit TUNE, ATU and CW-text controller routes preserve the existing model
+preflight, speed expansion and UI notifications while carrying a captured
+request through dispatch. They do not install an ambient caller identity around
+a widget callback. TUNE, ATU and the radio-side CW queue are singleton resources:
+a different producer cannot replace an active same-kind request. A refusal
+closes that input; retry requires fresh intent after the earlier contribution
+finishes. Compatible MOX contributions still use their separate holds.
+
+Scoped release must match the request's activity. A PTT off cannot consume a
+TUNE request, duplicate release does not write twice, and ATU status completion
+retires its captured originating intent. CW-text handoff retains that intent
+through all queued segments, not merely until `send()` returns. A CAT client's
+disconnect fences its queued text immediately; its stop command cannot clear
+another client's CW queue. Synchronous abort notifications cannot insert a
+replacement queue into the clear operation still on the stack.
 
 `Producer::request()` captures a bounded request cell and connection generation
 at input, before queued admission. The engine binds it once to an original

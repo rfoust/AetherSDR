@@ -121,6 +121,7 @@ public:
     Writer tuneWriter;
     Writer atuWriter;
     std::function<void(const TxCoordinator::Operation&)> cwTextWriter;
+    Writer cwTextQueueWriter;
     QStringList* commands;
     explicit RecordingBackend(QStringList& record) : commands(&record)
     {
@@ -160,11 +161,14 @@ public:
     }
     void setCwKeying(bool on, bool, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { *commands << (on ? "cw:on" : "cw:off"); }
     QString sendCwText(const QString& text, const TxCoordinator::Operation& operation,
-                       const TxCoordinator::Completion&) override
+                       const TxCoordinator::Completion& completion) override
     {
         *commands << "cwx:" + text;
         if (cwTextWriter) {
             cwTextWriter(operation);
+        }
+        if (cwTextQueueWriter) {
+            cwTextQueueWriter(true, operation, completion);
         }
         return cwRejection;
     }
@@ -1238,6 +1242,157 @@ void producerNormalTails()
     f.radio.setProducerTransmit(fourth, false);
 }
 
+void producerCwxQueue()
+{
+    Fixture f;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+    const TxCoordinator::Request request = producer.request();
+    TxCoordinator::Operation queued;
+    TxCoordinator::Completion completion;
+    f.backend->cwTextQueueWriter = [&](bool, const auto& operation, const auto& done) {
+        queued = operation;
+        completion = done;
+    };
+    check(f.radio.requestProducerCwx(request, QStringLiteral("TEST"))
+              && queued.permitsDispatch(TxCoordinator::monotonicMs()),
+          "scoped CW text retains its original producer through queued handoff");
+    const qsizetype before = f.commands.size();
+    const TxCoordinator::Request competitor = f.radio.registerTxProducer().request();
+    check(!f.radio.requestProducerCwx(competitor, QStringLiteral("OTHER"))
+              && !competitor.valid() && f.commands.size() == before,
+          "another CW producer cannot replace or append to a live queue");
+    completion.finish();
+    check(!queued.permitsDispatch(TxCoordinator::monotonicMs()),
+          "scoped CW handoff completes only after its terminal writer returns");
+    f.radio.abortProducerCwx(request);
+    const qsizetype stopped = f.commands.size();
+    f.radio.abortProducerCwx(request);
+    check(f.commands.last() == QStringLiteral("cwx:abort") && f.commands.size() == stopped,
+          "scoped CW tail abort is available after local handoff and idempotent");
+    const TxCoordinator::Request fresh = producer.request();
+    check(f.radio.requestProducerCwx(fresh, QStringLiteral("NEXT")), "fresh CW input can start a new batch");
+    const qsizetype replacement = f.commands.size();
+    f.radio.abortProducerCwx(request);
+    check(f.commands.size() == replacement && queued.permitsDispatch(TxCoordinator::monotonicMs()),
+          "old CW abort cannot consume a replacement producer request");
+    producer.invalidate();
+    check(!queued.permitsDispatch(TxCoordinator::monotonicMs()),
+          "producer teardown immediately fences queued CW before owner-thread cleanup");
+    completion.finish();
+}
+
+void protocolCwxLifetimes()
+{
+    const auto drain = [] {
+        for (int i = 0; i != 6; ++i) {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        }
+    };
+    QStringList wire;
+    RadioConnection connection;
+    Fixture f;
+    TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, wire);
+    {
+        RigctlProtocol abandoned(&f.radio);
+        check(abandoned.handleLine("b CQ") == "RPRT 0\n", "rigctl queues syntactically valid scoped Morse input");
+    }
+    drain();
+    check(wire.filter("cwx send").isEmpty(), "CAT lifetime ends before queued Morse can be admitted");
+    {
+        SmartCatProtocol owner(&f.radio);
+        RigctlProtocol unrelated(&f.radio);
+        (void)owner.processCommand("KY CQ");
+        drain();
+        check(wire.filter("cwx send").size() == 1, "SmartCAT sends through the production scoped CW route");
+        wire.clear();
+        (void)unrelated.handleLine("\\stop_morse");
+        drain();
+        check(wire.isEmpty(), "another CAT client's stop_morse cannot clear the active producer's queue");
+        owner.releasePtt();
+        drain();
+        check(wire.contains("cwx clear"), "SmartCAT disconnect aborts only its original CW queue");
+    }
+    drain();
+}
+
+void producerTuneAndAtu()
+{
+    {
+        Fixture f;
+        const TxCoordinator::Request request = f.radio.registerTxProducer().request();
+        const TxCoordinator::Request competitor = f.radio.registerTxProducer().request();
+        QObject::connect(&f.radio.transmitModel(), &TransmitModel::tuneChanged, &f.radio, [&](bool on) {
+            if (on) {
+                f.radio.requestProducerTune(competitor, true);
+                f.radio.requestProducerTune(competitor, false);
+            }
+        });
+        check(f.radio.requestProducerTune(request, true) && f.commands.contains("tune:on"),
+              "a reentrant refused producer cannot invalidate another producer's TUNE start");
+        f.radio.requestProducerTune(request, false);
+    }
+    for (const bool tuner : {false, true}) {
+        Fixture f;
+        const TxCoordinator::Producer producer = f.radio.registerTxProducer();
+        const TxCoordinator::Request request = producer.request();
+        TxCoordinator::Operation queued;
+        TxCoordinator::Completion completion;
+        const RecordingBackend::Writer writer = [&](bool on, const auto& operation, const auto& done) {
+            if (on) {
+                queued = operation;
+            } else {
+                completion = done;
+            }
+        };
+        f.backend->tuneWriter = writer;
+        f.backend->atuWriter = writer;
+        const auto drive = [&](bool on) {
+            return tuner ? f.radio.requestProducerAtu(request, on)
+                         : f.radio.requestProducerTune(request, on, true);
+        };
+        check(drive(true) && queued.permitsDispatch(TxCoordinator::monotonicMs()),
+              "producer TUNE/ATU uses the typed engine route and original request");
+        const qsizetype before = f.commands.size();
+        const TxCoordinator::Request competitor = f.radio.registerTxProducer().request();
+        check(!(tuner ? f.radio.requestProducerAtu(competitor, true)
+                      : f.radio.requestProducerTune(competitor, true))
+                  && !competitor.valid() && f.commands.size() == before,
+              "another producer cannot replace a live singleton TUNE/ATU context");
+        f.radio.setProducerTransmit(request, false);
+        f.radio.abortProducerPtt(request, TransmitModel::PttSource::Mox);
+        check(f.commands.size() == before && request.valid(),
+              "a PTT release cannot consume a different activity's request");
+        check(drive(false) && queued.permitsDispatch(TxCoordinator::monotonicMs()),
+              "scoped TUNE/ATU keeps a short queued pulse alive through its own cleanup");
+        const qsizetype released = f.commands.size();
+        drive(false);
+        check(f.commands.size() == released, "duplicate scoped TUNE/ATU release cannot write twice");
+        completion.finish();
+        check(!queued.permitsDispatch(TxCoordinator::monotonicMs()),
+              "TUNE/ATU queue consumption ends only its original contribution");
+    }
+    {
+        Fixture f;
+        const TxCoordinator::Request request = f.radio.registerTxProducer().request();
+        f.radio.requestProducerAtu(request, true);
+        const TxCoordinator::Operation operation = f.radio.transmitOperation();
+        TransmitDelta delta;
+        delta.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+        TxOperationIntegrationTestAccess::transmitDelta(f.radio, delta);
+        check(!operation.permitsDispatch(TxCoordinator::monotonicMs()),
+              "ATU terminal readback retires its original scoped contribution");
+    }
+    {
+        Fixture f;
+        const TxCoordinator::Request request = f.radio.registerTxProducer().request();
+        f.radio.transmitModel().setPttPreflight([](TransmitModel::PttSource) {
+            return QStringLiteral("test refusal");
+        });
+        check(!f.radio.requestProducerTune(request, true) && !request.valid() && f.commands.isEmpty(),
+              "scoped TUNE preflight refusal closes input without dispatching or changing authority");
+    }
+}
+
 #ifdef HAVE_WEBSOCKETS
 void tciProducerLifetimes()
 {
@@ -1296,6 +1451,9 @@ int main(int argc, char** argv)
     testInjectionReopensAdmission();
     protocolProducerLifetimes();
     producerNormalTails();
+    producerTuneAndAtu();
+    producerCwxQueue();
+    protocolCwxLifetimes();
 #ifdef HAVE_WEBSOCKETS
     tciProducerLifetimes();
 #endif

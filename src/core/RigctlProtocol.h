@@ -154,6 +154,7 @@ private:
     RadioModel* m_model;
     TxCoordinator::Producer m_txProducer;
     TxCoordinator::Request m_pttRequest;
+    TxCoordinator::Request m_cwxRequest;
     int  m_sliceIndex{0};
     bool m_extended{false};
     // Set when a bare `b` / `\send_morse` arrives without inline text.
