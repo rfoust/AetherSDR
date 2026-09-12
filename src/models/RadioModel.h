@@ -63,6 +63,7 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
         && capabilities.takesTxAudioOverSeam;
 }
 
+class AprsDigipeaterModel;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -87,6 +88,7 @@ class RadioModel : public QObject {
 
 public:
     explicit RadioModel(QObject* parent = nullptr);
+    AprsDigipeaterModel* aprsDigipeater();
     ~RadioModel() override;
 
     // Access the underlying connection and panadapter stream
@@ -167,6 +169,21 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+
+    // Firmware-upload retry barrier (#5572). A dispatched firmware upload has
+    // no attempt identifier in the `file update` status, so a late failure from
+    // a previous attempt cannot be told apart from a fresh one on the same
+    // command session. The barrier therefore has to outlive the uploader, and
+    // the uploader is parented to RadioSetupDialog — which carries
+    // WA_DeleteOnClose, so closing the window would otherwise drop the barrier
+    // and hand the operator exactly the ambiguous retry it exists to forbid.
+    // It lives here because the connection is what it is really keyed to: only
+    // a genuine disconnect→reconnect clears it (see setConnected()).
+    bool firmwareRetryBlocked() const { return m_firmwareRetryBlocked; }
+    void blockFirmwareRetryUntilReconnect() { m_firmwareRetryBlocked = true; }
+    // Only for an outcome the radio itself settled (`file update failed=`),
+    // which leaves nothing pending to misattribute to the next attempt.
+    void clearFirmwareRetryBlock() { m_firmwareRetryBlocked = false; }
     // "idle" / "connecting" / "connected" — the bridge's third value, so a
     // caller can tell a connect that is working from one that is not happening
     // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
@@ -545,6 +562,10 @@ public:
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
     bool    cwxActive()    const { return m_cwxActive; }
+    // #5422: physical paddle state from the admission points (MainWindow /
+    // serial slot), so the TUNE-start refusal cannot slip through the gap
+    // between two iambic elements when m_cwKeyActive is momentarily false.
+    void    setCwPaddleHeld(bool held) { m_cwPaddleHeld = held; }
     void    setBinauralRx(bool on);  // optimistic update + radio command
     bool    muteLocalWhenRemote() const { return m_muteLocalWhenRemote; }
     bool    autoSave() const { return m_autoSave; }
@@ -1592,6 +1613,7 @@ private:
     // decide whether a connect needs a different backend.
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;
@@ -1860,6 +1882,7 @@ private:
     bool        m_txRequested{false}; // local MOX command intent (for edge sync)
     bool        m_cwKeyActive{false}; // true while CW key/paddle is held (#1379)
     bool        m_cwxActive{false};   // true while CWX send is in flight (#2047, #2097)
+    bool        m_cwPaddleHeld{false}; // true while a paddle is physically held (#5422)
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
@@ -1959,6 +1982,10 @@ private:
     QHash<QString, int> m_panTransmitInhibitedTxSlices;
     int  m_tuneInhibitBandId{-1};  // band ID whose TX outputs were inhibited during tune
     bool m_tuneInhibitActive{false};
+    // #5572 firmware-upload retry barrier. Set when an upload is dispatched to
+    // the radio; cleared only when a NEW connection is established, so it
+    // survives the Radio Setup dialog (and its uploader) being closed.
+    bool m_firmwareRetryBlocked{false};
 
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
     void applyTuneInhibit();    // suppress selected TX outputs before tune

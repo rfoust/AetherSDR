@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "models/AprsDigipeaterModel.h"
 #include <QPointer>
 #include "core/GuiClientIdentityPolicy.h"
 #include "AntennaAliasStore.h"
@@ -2408,6 +2409,18 @@ RadioModel::RadioModel(QObject* parent)
     m_transmitModel.setPttPreflight([this](TransmitModel::PttSource source) {
         return localPttInterlockMessage(source);
     });
+    // No TUNE start while a client CW source is keying (#5422): the radio
+    // would come up with no carrier and stay in TX with tune=1.
+    m_transmitModel.setTuneAdmission([this]() -> QString {
+        constexpr unsigned kCwActivities =
+            static_cast<unsigned>(TxActivity::CwKey)
+            | static_cast<unsigned>(TxActivity::Cwx);
+        if (m_cwKeyActive || m_cwPaddleHeld || m_cwxActive
+            || (m_txActivities & kCwActivities) != 0) {
+            return tr("TUNE not started: CW is keyed");
+        }
+        return {};
+    });
     connect(&m_transmitModel, &TransmitModel::pttBlocked,
             this, [this](const QString& message) {
         const QString panId = txSlice() ? txSlice()->panId() : QString();
@@ -2494,6 +2507,8 @@ RadioModel::RadioModel(QObject* parent)
         if (m_backend)
             m_backend->setNotchesEnabled(on);
     });
+    // No CWX text while TUNE is active (#5422): the radio keys it at TUNE power.
+    m_cwxModel.setSendAvailability([this] { return m_transmitModel.admitsCwxSend(); });
     m_cwxModel.setTransmissionAdmission([this]() -> CwxModel::TransmissionPermit {
         if (!beginLocalTxActivity(TxActivity::Cwx)) {
             return {};
@@ -2705,6 +2720,21 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
 
+}
+
+AprsDigipeaterModel* RadioModel::aprsDigipeater()
+{
+    if (!m_aprsDigipeater) {
+        m_aprsDigipeater = std::make_unique<AprsDigipeaterModel>();
+        connect(this, &RadioModel::connectionStateChanged, m_aprsDigipeater.get(),
+                [this](bool connected) {
+            if (!connected) {
+                m_aprsDigipeater->setEnabled(false);
+                m_aprsDigipeater->clear();
+            }
+        });
+    }
+    return m_aprsDigipeater.get();
 }
 
 RadioModel::~RadioModel()
@@ -4894,6 +4924,13 @@ QString RadioModel::audioCompressionParam() const
 void RadioModel::sendCwKey(bool down, const QString& debugSource,
                            quint64 debugTraceId, quint64 debugSourceMs)
 {
+    // No CW key-down while TUNE is active; key-up always passes (#5422).
+    // Backstop for every caller, including the TCI keyer verb.
+    if (!m_transmitModel.admitsCwKeyEdge(down)) {
+        qCWarning(lcCw).noquote() << "CW key-down refused: TUNE is active (#5422) source="
+                                  << (debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource);
+        return;
+    }
     if (down && !beginLocalTxActivity(TxActivity::CwKey)) {
         return;
     }
@@ -4968,6 +5005,13 @@ void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
                                quint64 debugTraceId, quint64 debugSourceMs,
                                std::chrono::steady_clock::time_point scheduledAt)
 {
+    // No CW key-down while TUNE is active; key-up always passes (#5422).
+    // Covers the local iambic keyer's elements when TUNE starts mid-train.
+    if (!m_transmitModel.admitsCwKeyEdge(down)) {
+        qCWarning(lcCw).noquote() << "CW key-down refused: TUNE is active (#5422) source="
+                                  << (debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource);
+        return;
+    }
     if (down && !beginLocalTxActivity(TxActivity::CwKey)) {
         return;
     }
@@ -6594,6 +6638,11 @@ void RadioModel::onConnected()
     if (AppSettings::instance().value("InhibitSleepWhileConnected", "False").toString() == "True")
         m_sleepInhibitor.acquire("AetherSDR connected to radio");
 
+    // A fresh command session is the one thing that makes a firmware retry
+    // unambiguous again: any `file update` status arriving now belongs to this
+    // connection, not to an attempt dispatched before the radio rebooted (#5572).
+    m_firmwareRetryBlocked = false;
+
     emit connectionStateChanged(true);
     // A Flex dumps its memory slots as status during the handshake below. A
     // radio without any has nothing to dump, so the bank is what populates the
@@ -7577,6 +7626,7 @@ void RadioModel::onDisconnected()
 
     m_txRequested = false;
     m_cwKeyActive = false;
+    m_cwPaddleHeld = false;   // a paddle held across a disconnect must not keep TUNE refused (#5422)
     m_cwxActive = false;
     m_cwxDrainArmed = false;
     // Reset the CWX drain watch and bump its epoch so a watch armed mid-macro

@@ -571,6 +571,18 @@ add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
+# Socket-free shared-pool admission and injected receiver lifetime tests. These
+# foundations are compiled/tested even when the optional RTL USB driver is off.
+add_executable(wdsp_channel_reservation_test tests/wdsp_channel_reservation_test.cpp)
+target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
+add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
+set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
+
+add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
+target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)
+set_tests_properties(rtl_receiver_registry_test PROPERTIES TIMEOUT 120)
+
 # HL2 Metis protocol — pure wire encode/decode, standalone (no Qt / aethercore).
 add_executable(hl2_metis_protocol_test
     tests/hl2_metis_protocol_test.cpp
@@ -1902,6 +1914,15 @@ target_include_directories(waveform_upload_state_test PRIVATE src)
 target_link_libraries(waveform_upload_state_test PRIVATE Qt6::Core)
 add_test(NAME waveform_upload_state_test COMMAND waveform_upload_state_test)
 
+# #5572 — socket-free firmware upload lifecycle. The injected writer exercises
+# production queue accounting and terminal handlers without a radio peer.
+add_executable(firmware_uploader_test
+    tests/firmware_uploader_test.cpp
+)
+target_include_directories(firmware_uploader_test PRIVATE src)
+target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp
@@ -2343,6 +2364,12 @@ add_executable(waveform_install_gate_test
 target_include_directories(waveform_install_gate_test PRIVATE src)
 target_link_libraries(waveform_install_gate_test PRIVATE Qt6::Core)
 add_test(NAME waveform_install_gate_test COMMAND waveform_install_gate_test)
+
+# D-STAR capability/build visibility and delayed-start admission. Pure policy:
+# no QApplication, settings, helper process, serial device, or sockets.
+add_executable(dstar_availability_gate_test tests/dstar_availability_gate_test.cpp)
+target_include_directories(dstar_availability_gate_test PRIVATE src)
+add_test(NAME dstar_availability_gate_test COMMAND dstar_availability_gate_test)
 
 # DVK indicator availability — TX-slice mode + the radio's DVK entitlement.
 # Header-only, pure logic.
@@ -3242,6 +3269,28 @@ target_include_directories(aprs_messenger_test PRIVATE src)
 target_link_libraries(aprs_messenger_test PRIVATE Qt6::Core)
 add_test(NAME aprs_messenger_test COMMAND aprs_messenger_test)
 
+add_executable(aprs_fill_in_digipeater_test
+    tests/aprs_fill_in_digipeater_test.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_fill_in_digipeater_test PRIVATE src)
+target_link_libraries(aprs_fill_in_digipeater_test PRIVATE Qt6::Core)
+add_test(NAME aprs_fill_in_digipeater_test COMMAND aprs_fill_in_digipeater_test)
+
+# Socket-free injected APRS frames, producer cancellation and queue admission.
+add_executable(aprs_digipeater_model_test
+    tests/aprs_digipeater_model_test.cpp
+    src/models/AprsDigipeaterModel.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
+    src/core/aprs/AprsBeacon.cpp
+    src/core/aprs/AprsPacket.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_digipeater_model_test PRIVATE src)
+target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
+add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)
+
 add_executable(tnc_terminal_test
     tests/tnc_terminal_test.cpp
     src/core/tnc/Ax25.cpp
@@ -3598,6 +3647,14 @@ add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
 target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
+
+# HL2 band filter / EP2 frame composition — socket-free, on MetisClient's own
+# packet builder. A band change must not leave two disagreeing config banks in
+# one frame (#4579).
+add_executable(hl2_band_filter_frame_test tests/hl2_band_filter_frame_test.cpp)
+target_include_directories(hl2_band_filter_frame_test PRIVATE src)
+target_link_libraries(hl2_band_filter_frame_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
 
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
