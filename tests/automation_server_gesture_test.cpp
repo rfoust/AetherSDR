@@ -25,10 +25,11 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class AutomationServerTestAccess {
 public:
-    static QJsonObject request(AutomationServer& server, QJsonObject object)
+    static QJsonObject request(AutomationServer& server, QJsonObject object,
+                              QLocalSocket* identity = nullptr)
     {
         object[QStringLiteral("token")] = QStringLiteral("test-token");
-        return server.handleLine(QJsonDocument(object).toJson(QJsonDocument::Compact), nullptr);
+        return server.handleLine(QJsonDocument(object).toJson(QJsonDocument::Compact), identity);
     }
 };
 }
@@ -193,16 +194,17 @@ int main(int argc, char** argv)
         receiveInvoke.value(QStringLiteral("ok")).toBool()
             && waitUntil([&] { return receiveButton.isChecked(); })
             && scopedReceiveCalls == 1 && nativeReceiveCalls == 0 && !receivedTxAuthority);
+    QLocalSocket receiveIdentity; // inert lease identity: never opened/connected
     const QJsonObject receiveBegin = AutomationServerTestAccess::request(server, {
         {QStringLiteral("cmd"), QStringLiteral("gesture")},
         {QStringLiteral("action"), QStringLiteral("begin")},
         {QStringLiteral("target"), QStringLiteral("receiveButton")},
         {QStringLiteral("value"), QStringLiteral("8 %1").arg(receiveButton.height() / 2)},
-    });
+    }, &receiveIdentity);
     const QJsonObject receiveEnd = AutomationServerTestAccess::request(server, {
         {QStringLiteral("cmd"), QStringLiteral("gesture")},
         {QStringLiteral("action"), QStringLiteral("end")},
-    });
+    }, &receiveIdentity);
     expect("TX-disabled modem pointer action never sends native toggle",
         receiveBegin.value(QStringLiteral("ok")).toBool()
             && receiveEnd.value(QStringLiteral("ok")).toBool()
