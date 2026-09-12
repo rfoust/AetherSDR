@@ -105,21 +105,30 @@ TxCoordinator::Admission TxCoordinator::acquire(const Actor& actor, qint64 now)
         }
         return {m_active, Refusal::None};
     }
+    if (m_unconfirmed.m_state && m_unconfirmed.m_state->actor != actor.m_state) {
+        // Local queue completion says nothing about a radio-buffered tail.
+        // Keep the preceding owner until qualified stop evidence arrives.
+        return {{}, Refusal::Busy};
+    }
     if (m_identity->generation.load() == std::numeric_limits<quint64>::max()) {
         return {{}, Refusal::Recovering};
     }
     m_active.m_state = std::make_shared<OperationState>();
     m_active.m_state->actor = actor.m_state;
-    m_active.m_state->startedMs = now;
+    m_active.m_state->startedMs = m_unconfirmed.m_state
+        ? m_unconfirmed.m_state->startedMs : now;
     m_active.m_state->maximumMs = actor.m_state->policy.maximumOperationMs;
     m_active.m_state->generation = ++m_identity->generation;
+    m_unconfirmed = {};
     return {m_active, Refusal::None};
 }
 
 bool TxCoordinator::owns(const Actor& actor, const Operation& operation) const
 {
-    return onThread() && validActor(actor) && m_active.sameOperation(operation)
-        && m_active.m_state->actor == actor.m_state;
+    return onThread() && validActor(actor)
+        && ((m_active.sameOperation(operation) && m_active.m_state->actor == actor.m_state)
+            || (m_unconfirmed.sameOperation(operation)
+                && m_unconfirmed.m_state->actor == actor.m_state));
 }
 
 TxCoordinator::Operation TxCoordinator::cleanupFence() const
@@ -135,23 +144,25 @@ TxCoordinator::Operation TxCoordinator::cleanupFence() const
     return fence;
 }
 
-bool TxCoordinator::complete(const Operation& operation)
+bool TxCoordinator::finishLocalIntent(const Operation& operation)
 {
     if (!onThread() || !m_active.sameOperation(operation)) {
         return false;
     }
     m_active.m_state->cancelled.store(true, std::memory_order_release);
+    m_unconfirmed = m_active;
     m_active = {};
     return true;
 }
 
 void TxCoordinator::stop(StopReason reason)
 {
-    if (!m_active.m_state) {
+    if (!m_active.m_state && !m_unconfirmed.m_state) {
         return;
     }
-    m_stopping = m_active;
+    m_stopping = m_active.m_state ? m_active : m_unconfirmed;
     m_active = {};
+    m_unconfirmed = {};
     m_stopping.m_state->cancelled.store(true, std::memory_order_release);
     // Publish recovery state before invoking user code. Reentrant requests may
     // not acquire and get unkeyed by cleanup for the preceding operation.
@@ -176,15 +187,27 @@ void TxCoordinator::revoke(const Actor& actor)
         return;
     }
     actor.m_state->revoked = true;
-    if (m_active.m_state && m_active.m_state->actor == actor.m_state) {
+    if ((m_active.m_state && m_active.m_state->actor == actor.m_state)
+        || (m_unconfirmed.m_state && m_unconfirmed.m_state->actor == actor.m_state)) {
         stop(StopReason::ActorRevoked);
     }
 }
 
 void TxCoordinator::expire(qint64 now)
 {
-    if (onThread() && m_active.m_state && !m_active.permitsDispatch(now)) {
+    if (!onThread()) {
+        return;
+    }
+    if (m_active.m_state && !m_active.permitsDispatch(now)) {
         stop(StopReason::Expired);
+    } else if (m_unconfirmed.m_state) {
+        // Its dispatch fence is already cancelled, so check the original
+        // deadline rather than treating cancellation itself as expiration.
+        const OperationState& state = *m_unconfirmed.m_state;
+        if (now < state.startedMs
+            || (state.maximumMs > 0 && now - state.startedMs >= state.maximumMs)) {
+            stop(StopReason::Expired);
+        }
     }
 }
 
@@ -209,11 +232,18 @@ void TxCoordinator::emergencyStop()
 
 bool TxCoordinator::acknowledgeStopped(const Operation& operation)
 {
-    if (!onThread() || !m_stopping.sameOperation(operation)) {
+    if (!onThread()) {
         return false;
     }
-    m_stopping = {};
-    return true;
+    if (m_stopping.sameOperation(operation)) {
+        m_stopping = {};
+        return true;
+    }
+    if (m_unconfirmed.sameOperation(operation)) {
+        m_unconfirmed = {};
+        return true;
+    }
+    return false;
 }
 
 bool TxCoordinator::recovering() const

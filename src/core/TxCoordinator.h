@@ -69,16 +69,21 @@ public:
     // Stop-only delivery fence, including when no operation was acquired.
     // It conveys no key-on, ownership, completion or acknowledgment authority.
     [[nodiscard]] Operation cleanupFence() const;
-    // Normal completion is for an already-stopped operation. Cancellation
-    // invalidates queued work first, then calls the engine's immediate stop.
-    [[nodiscard]] bool complete(const Operation& operation);
+    // Ends local intent and fences queued key-on, but does NOT assert radio
+    // idle. Until qualified acknowledgment, only this same actor can start
+    // another operation (the transitional desktop compatibility workflow).
+    // A bounded actor retains its original deadline across unconfirmed tails.
+    [[nodiscard]] bool finishLocalIntent(const Operation& operation);
+    // Cancellation invalidates queued work before the engine's immediate stop.
     [[nodiscard]] bool cancel(const Actor& actor, const Operation& operation);
     void revoke(const Actor& actor);
     void expire(qint64 monotonicMs);
     void reset();
     void emergencyStop();
-    // The stop handler must arrange qualified readback or transport completion
-    // before acknowledging recovery. Merely requesting unkey is not proof.
+    // Qualified readback or transport teardown must precede acknowledgment.
+    // Merely requesting unkey or draining a local queue is not proof. A matching
+    // acknowledgment clears either forced-stop recovery or an unconfirmed local
+    // completion. An old completion cannot acknowledge a newer operation.
     //
     // INVARIANT: every stop source needs a matching acknowledgment, because an
     // unacknowledged stop keeps admission closed forever — recovering() stays
@@ -118,6 +123,7 @@ private:
     std::shared_ptr<Identity> m_identity;
     std::vector<std::weak_ptr<ActorState>> m_actors;
     Operation m_active;
+    Operation m_unconfirmed;
     Operation m_stopping;
     StopHandler m_stopHandler;
     bool m_inStopHandler{false};

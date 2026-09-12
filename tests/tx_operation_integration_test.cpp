@@ -28,6 +28,7 @@ public:
     static bool cwxDrainArmed(const RadioModel& radio) { return radio.m_cwxDrainArmed; }
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
+    static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
     static void bindTxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
         encoder.setTxCommandSink([&radio](const QString& command, bool keying) {
@@ -202,6 +203,44 @@ void refusedStartsAndUnconditionalStops()
     f.radio.cwxModel().clearBuffer();
     check(f.commands == QStringList({"mox:off", "tune:off", "atu:off", "cw:off", "mox:off", "cwx:abort"}),
           "key-up, bypass and clear remain available after capability loss");
+}
+
+void localCompletionDoesNotAuthorizeHandoff()
+{
+    Fixture f;
+    TxCoordinator& coordinator = TxOperationIntegrationTestAccess::coordinator(f.radio);
+    const TxCoordinator::Actor competitor = coordinator.registerActor({true, 0});
+    f.radio.setTransmit(true);
+    const TxCoordinator::Operation first = f.radio.transmitOperation();
+    f.radio.setTransmit(false);
+    check(!first.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "production MOX release fences dispatch after local completion");
+    check(coordinator.acquire(competitor, std::numeric_limits<qint64>::max()).refusal
+              == TxCoordinator::Refusal::Busy,
+          "production completion cannot lend the radio to an independent actor");
+    f.radio.setTransmit(true);
+    const TxCoordinator::Operation second = f.radio.transmitOperation();
+    check(!first.sameOperation(second) && second.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "normal desktop reengagement remains available without a new duration cap");
+    check(!coordinator.acknowledgeStopped(first), "old local completion cannot acknowledge reengaged desktop TX");
+    f.radio.setTransmit(false);
+    // Uncorrelated radio RX status must not be upgraded into qualified handoff.
+    TransmitDelta idle;
+    idle.mox = false;
+    idle.tune = false;
+    TxOperationIntegrationTestAccess::transmitDelta(f.radio, idle);
+    emit f.backend->keyingStateConfirmed(false);
+    check(coordinator.acquire(competitor, std::numeric_limits<qint64>::max()).refusal
+              == TxCoordinator::Refusal::Busy,
+          "uncorrelated RX state does not release an unconfirmed owner");
+    TxOperationIntegrationTestAccess::teardownWithPendingReply(f.radio, [](quint32, const QString&) {});
+    check(!coordinator.recovering() && !second.permitsCleanup(),
+          "production backend teardown acknowledges the retained owner and retires its generation");
+    const TxCoordinator::Admission afterTeardown = coordinator.acquire(competitor, std::numeric_limits<qint64>::max());
+    check(afterTeardown.accepted(), "transport teardown clears the old ownership barrier");
+    check(coordinator.finishLocalIntent(afterTeardown.operation)
+              && coordinator.acknowledgeStopped(afterTeardown.operation),
+          "test-only admission is retired without dispatching keying");
 }
 
 void cwTuneMutualExclusion()
@@ -880,6 +919,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     primaryRoutes();
     refusedStartsAndUnconditionalStops();
+    localCompletionDoesNotAuthorizeHandoff();
     cwTuneMutualExclusion();
     delayedReleaseAndReplacement();
     flexEncoding();

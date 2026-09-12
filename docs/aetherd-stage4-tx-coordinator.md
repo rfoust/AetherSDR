@@ -22,6 +22,16 @@ Zero maximum duration preserves the existing unbounded local-operator workflow.
 The optional bounded policy is tested in isolation but is not granted to daemon
 clients by this increment.
 
+`finishLocalIntent()` cancels further key-on delivery but retains the preceding
+owner in an unconfirmed-completion slot. Only that same actor may reengage before
+qualified stop evidence; another actor remains `Busy`. Reengagement creates a new
+queue generation, so old cleanup cannot unkey it, while carrying the original
+bounded deadline forward. Local release/re-key cannot renew a bounded lease.
+`acknowledgeStopped()` alone releases ownership for handoff, and only for the
+matching finished or forcibly stopped operation. Active intent and stale earlier
+operations cannot be acknowledged. No production radio-status handler supplies
+this acknowledgment yet; transport teardown remains the recovery boundary.
+
 Cancellation, revocation and expiry invalidate key-on delivery before invoking
 the stop callback. Recovery is published before that callback and remains an
 admission barrier even if the callback acknowledges synchronously. A stale
@@ -199,7 +209,11 @@ provisioning, remote listener, TLS policy, device discovery or transmit default
 is changed. The bridge's existing permission gate and watchdog remain intact.
 
 Desktop compatibility completion ends a local intent, **not** a qualified
-radio-idle claim. It must not be reused to authorize another client's TX.
+radio-idle claim. The coordinator now enforces this distinction rather than
+relying on callers to avoid treating local completion as handoff authority.
+Cancellation, revocation, expiry and reset also retain and stop an unconfirmed
+tail, not just an operation whose local intent is still active. The same actor's
+unbounded desktop reengagement remains compatible with existing controls.
 The remaining work must propagate per-client actors through all integration
 and audio producers, bind bounded actor expiry to engine scheduling, complete
 qualified stop/readback recovery and fence remaining queued audio/wire paths.
@@ -215,7 +229,9 @@ does not perform that conversion or begin Stage 5 streaming.
 ## Verification boundary
 
 `tx_coordinator_test` exercises actor isolation, duration, revocation, recovery,
-stale handles, thread affinity, reentrancy and cleanup-only authority.
+stale handles, thread affinity, reentrancy and cleanup-only authority. It also
+covers unconfirmed ownership, same-actor reengagement, stale acknowledgment,
+every unconfirmed-tail stop source and non-renewal of the original deadline.
 `tx_operation_integration_test` drives production model entry points with an
 injected backend and terminal packet writer. It does not start a radio peer,
 bind a socket, discover hardware or transmit RF. It covers typed dispatch,
@@ -223,8 +239,10 @@ refusals, deferred release, replacement, reentrant intent, Quindar, CWX and
 queued NetCW, primary Flex and CWX delivery. The additional cases cover short
 MOX/TUNE/ATU edges, reset-before-write, idle cleanup, reengagement, CWX
 clear-and-replace while MOX is held, producer destruction, cancelled reply
-retirement, and preservation of unknown-length macro tails. Existing model,
-ATU, Icom, CAT/TUNE, applet and bridge
+retirement, and preservation of unknown-length macro tails.
+Production local completion and uncorrelated RX readback are tested not to
+authorize another actor; backend teardown clears the retained ownership barrier.
+Existing model, ATU, Icom, CAT/TUNE, applet and bridge
 watchdog tests remain part of the targeted regression set.
 The private test-only terminal writers in `PanadapterStream` and
 `RadioConnection` allow these queue tests to exercise production dispatch without

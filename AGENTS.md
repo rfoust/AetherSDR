@@ -546,6 +546,9 @@ Step 4 has an engine-owned `TxCoordinator` and a transitional desktop actor;
 this is not yet per-client TX authorization. Flex primary keying and CWX text
 carry operation/batch fences to the original TCP writer. A queue-consumed
 callback ends local handoff only, never proves radio idle. Preserve normal
+operator reengagement, but use `finishLocalIntent()` rather than asserting a
+qualified stop: the coordinator retains that actor until matching stop evidence
+arrives. Uncorrelated RX status must not clear this handoff barrier. Preserve
 short key-down/key-up sequences, Quindar/RADE release tails, and held MOX when
 cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
 until the remaining producer/audio fences and qualified stop/recovery contract

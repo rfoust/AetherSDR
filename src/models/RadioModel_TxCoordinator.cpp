@@ -98,9 +98,9 @@ void RadioModel::completeLocalTxIfDrained()
     if (m_txActivities == 0 && m_pendingTxDeliveries == 0) {
         // Existing desktop sequencers explicitly end their local intent. This
         // fences pending work; it is NOT a claim that the radio is observed RX.
-        // Do not use this compatibility completion to authorize another
-        // client's TX. Per-client admission/readback is the next Stage 4 step.
-        (void)m_txCoordinator.complete(m_txOperation);
+        // The coordinator retains this actor's ownership until qualified
+        // acknowledgment; only this same compatibility actor can reengage.
+        (void)m_txCoordinator.finishLocalIntent(m_txOperation);
     }
 }
 
