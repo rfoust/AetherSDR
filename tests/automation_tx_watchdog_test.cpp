@@ -88,17 +88,17 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool on) override
+    void setKeying(bool on, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override
     {
         commands << (on ? "mox:on" : "mox:off");
         if (keyingWriter) {
             keyingWriter(on);
         }
     }
-    void setTune(bool on, int) override { commands << (on ? "tune:on" : "tune:off"); }
-    void setAtu(bool on) override { commands << (on ? "atu:on" : "atu:off"); }
-    void setCwKeying(bool on, bool, int) override { commands << (on ? "cw:on" : "cw:off"); }
-    void abortCwText() override { commands << "cwx:abort"; }
+    void setTune(bool on, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { commands << (on ? "tune:on" : "tune:off"); }
+    void setAtu(bool on, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { commands << (on ? "atu:on" : "atu:off"); }
+    void setCwKeying(bool on, bool, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { commands << (on ? "cw:on" : "cw:off"); }
+    void abortCwText(const TxCoordinator::Operation&, const TxCoordinator::Completion&) override { commands << "cwx:abort"; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 

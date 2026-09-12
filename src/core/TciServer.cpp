@@ -829,6 +829,7 @@ void TciServer::onNewConnection()
         protocol->setIqSampleRate(m_iqSampleRate);
 
         ClientState cs;
+        cs.txProducer = m_model->registerTxProducer(ws);
         cs.socket = ws;
         cs.protocol = protocol;
         cs.connectedAtMs = m_tciPttTelemetryClock.elapsed();
@@ -913,6 +914,9 @@ void TciServer::onClientDisconnected()
 
     for (int i = 0; i < m_clients.size(); ++i) {
         if (m_clients[i].socket == ws) {
+            // Invalidate at disconnect, before cleanup can reenter and before
+            // deleteLater destroys the socket; queued media must stop now.
+            m_clients[i].txProducer.invalidate();
             m_lastDisconnect = disconnectSnapshot(m_clients[i], ws);
             m_lastDisconnectAtMs = m_tciPttTelemetryClock.elapsed();
             if (m_pendingTrxRequest && m_pendingTrxRequest->client == ws) {
@@ -2507,6 +2511,17 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
                 TransmitModel::PttSource::TciHardware);
         }
 
+        for (const ClientState& connectedClient : self->m_clients) {
+            if (connectedClient.socket == socket) {
+                self->m_tciTxContext = self->m_model->captureTxMedia(connectedClient.txProducer);
+                break;
+            }
+        }
+        // Do not carry a previous client's resampling residue into this over.
+        if (self->m_txResampler) {
+            self->m_txResampler->reset();
+        }
+
         QTimer::singleShot(1250, self, [self, socket, generation, request]() {
             if (!self || generation != self->m_tciPttGeneration || !self->m_tciPttRequestedOn
                 || self->m_tciPttConfirmedOn) {
@@ -2596,6 +2611,11 @@ void TciServer::finishIcomUnkeySettle(quint64 generation)
 void TciServer::onBinaryMessage(const QByteArray& data)
 {
     if (!m_audio) return;
+    const TxCoordinator::Context context = m_tciTxContext;
+    if (sender() != m_tciPttClient || !m_tciPttRequestedOn || !m_tciPttWantsAudio
+        || !context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     if (data.size() < static_cast<int>(sizeof(TciAudioHeader))) return;
 
     // Parse header
@@ -2769,9 +2789,9 @@ void TciServer::onBinaryMessage(const QByteArray& data)
     if ((m_txAudioBlocks % kTxSummaryEveryBlocks) == 0)
         logTxAudioSummary("running");
 
-    QMetaObject::invokeMethod(m_audio, "feedDaxTxAudio",
-                              Qt::QueuedConnection,
-                              Q_ARG(QByteArray, pcm));
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, pcm, context] {
+        audio->feedDaxTxAudio(pcm, context);
+    }, Qt::QueuedConnection);
 }
 
 // ── RX audio from DAX pipeline → TCI binary frames ─────────────────────

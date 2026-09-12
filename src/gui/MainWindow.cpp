@@ -1731,17 +1731,16 @@ MainWindow::MainWindow(QWidget* parent)
         }
         m_qsoRecorder->feedTxAudio(pcm);
     });
-    // Host-modulated backends (HL2) take their transmit audio from the SAME tap
-    // the recorder uses: fully processed, after the test tone, compressor and
-    // EQ. One path means the TONE button, the microphone and the recording all
-    // agree with what actually goes on the air. A Flex radio modulates on the
-    // radio side and ignores this.
-    connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            this, [this](const QByteArray& pcm, bool clientLeveled) {
+    // Transport uses the same post-DSP samples as the recorder, but carries
+    // immutable producer provenance across this queued hop.
+    connect(m_audio, &AudioEngine::txTransportPcmReady,
+            this, [this](const QByteArray& pcm, bool clientLeveled,
+                         const TxCoordinator::Context& context) {
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
-                                   clientLeveled);
+                                   clientLeveled, context);
     });
     wireModemAudioCompletion();
+    wireTxAudioAuthority();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
     // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and

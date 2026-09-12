@@ -2490,6 +2490,10 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
 
         m_txPttClock.restart();
         txModel.requestPttOn(TransmitModel::PttSource::Dax);
+        if (!m_txProducer.valid()) {
+            m_txProducer = m_radio->registerTxProducer(this);
+        }
+        m_txContext = m_radio->captureTxMedia(m_txProducer);
         if (!m_txActive)
             return;
         if (waitsForRadioPtt) {
@@ -2615,9 +2619,9 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
         const quint64 generation = m_txGeneration;
         QPointer<AudioEngine> audio = m_audio;
         const bool queued = QMetaObject::invokeMethod(
-            m_audio, [audio, generation] {
+            m_audio, [audio, generation, context = m_txContext] {
                 if (audio) {
-                    audio->finishModemTxAudio(generation);
+                    audio->finishModemTxAudio(generation, context);
                 }
             }, Qt::QueuedConnection);
         if (!queued) {
@@ -2648,9 +2652,9 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
     ++m_txChunkIndex;
 
     QPointer<AudioEngine> audio = m_audio;
-    QMetaObject::invokeMethod(m_audio, [audio, chunk]() {
+    QMetaObject::invokeMethod(m_audio, [audio, chunk, context = m_txContext]() {
         if (audio)
-            audio->sendModemTxAudio(chunk);
+            audio->sendModemTxAudio(chunk, context);
     }, Qt::QueuedConnection);
 
     if (m_diagnosticsDebugEnabled
@@ -2731,7 +2735,7 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     if (m_audio) {
         if (m_txRestoreAudioDaxMode)
             m_audio->setDaxTxMode(m_txPreviousAudioDaxMode);
-        m_audio->clearTxAccumulators();  // self-marshals
+        m_audio->discardTxMedia(m_txContext);  // self-marshals with the original producer
     }
 
     if (hadTx) {

@@ -5,6 +5,7 @@
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 #include "IcomTciUnkeySettle.h"
+#include "TxCoordinator.h"
 
 #include <QObject>
 #include <QPointer>
@@ -247,6 +248,7 @@ private:
                                       const float* samples, int sampleCount);
 
     struct ClientState {
+        TxCoordinator::Producer txProducer;
         QWebSocket*  socket{nullptr};
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
@@ -400,6 +402,7 @@ private:
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
     QWebSocket*       m_txChronoClient{nullptr};
     QPointer<QWebSocket> m_tciPttClient;
+    TxCoordinator::Context m_tciTxContext;
     int m_tciPttTrx { 0 };
     bool m_tciPttWantsAudio { false };
     bool m_tciPttRequestedOn { false };

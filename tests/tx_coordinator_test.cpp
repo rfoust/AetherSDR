@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QThread>
+#include <QSemaphore>
 
 #include <cstdio>
 #include <limits>
@@ -328,6 +329,70 @@ void stopOnlyFences()
     check(!fence.permitsCleanup(), "idle queued key-up cannot affect a newer operation");
 }
 
+void terminalDispatchBarrier()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto actor = coordinator.registerActor({true, 0});
+    const auto other = coordinator.registerActor({true, 0});
+    const auto operation = coordinator.acquire(actor, 100).operation;
+    QSemaphore entered;
+    QSemaphore finish;
+    bool accepted = false;
+    std::unique_ptr<QThread> worker(QThread::create([&] {
+        const auto dispatch = operation.beginDispatch(101);
+        accepted = bool(dispatch);
+        entered.release();
+        (void)finish.tryAcquire(1, 5000);
+    }));
+    worker->start();
+    check(entered.tryAcquire(1, 5000) && accepted && coordinator.hasInFlightDispatches(),
+          "terminal writer enters a counted nonblocking dispatch guard");
+    check(coordinator.cancel(actor, operation) && !operation.beginDispatch(102),
+          "cancellation refuses new writes while an entered write remains accounted for");
+    check(!coordinator.acknowledgeStopped(operation)
+              && coordinator.acquire(other, 103).refusal == TxCoordinator::Refusal::Recovering,
+          "neither stop acknowledgment nor ownership transfer can outrun an entered write");
+    finish.release();
+    check(worker->wait(5000) && !coordinator.hasInFlightDispatches(),
+          "writer return retires its guard without waiting for the engine thread");
+    check(coordinator.acknowledgeStopped(operation), "qualified acknowledgment succeeds after writes finish");
+    const auto next = coordinator.acquire(other, 104).operation;
+    check(!operation.beginDispatch(104, false) && next.permitsDispatch(104),
+          "stale cleanup cannot enter after the next generation is admitted");
+    auto current = next.beginDispatch(105);
+    check(coordinator.finishLocalIntent(next)
+              && coordinator.acquire(other, 106).refusal == TxCoordinator::Refusal::Recovering,
+          "same-owner reengagement cannot pass a still-entered old write");
+    auto moved = std::move(current);
+    check(!current && moved && coordinator.hasInFlightDispatches(),
+          "moving a dispatch guard transfers its single outstanding hold");
+    moved = {};
+    check(!coordinator.hasInFlightDispatches() && coordinator.acquire(other, 107).accepted(),
+          "guard release permits fresh same-owner intent without a queued auto-start");
+
+    TxCoordinator idle([](const auto&, auto) {});
+    const auto idleActor = idle.registerActor({true, 0});
+    const auto cleanup = idle.cleanupFence();
+    auto cleanupWrite = cleanup.beginDispatch(0, false);
+    check(cleanupWrite && !cleanup.beginDispatch(0)
+              && idle.acquire(idleActor, 0).refusal == TxCoordinator::Refusal::Recovering,
+          "idle cleanup is counted but conveys no key-on or admission authority");
+    cleanupWrite = {};
+    check(idle.acquire(idleActor, 1).accepted() && !cleanup.beginDispatch(1, false),
+          "a new generation atomically excludes subsequent old idle cleanup");
+
+    TxCoordinator::Dispatch survivingWrite;
+    TxCoordinator::Operation destroyed;
+    {
+        TxCoordinator temporary([](const auto&, auto) {});
+        const auto owner = temporary.registerActor({true, 0});
+        destroyed = temporary.acquire(owner, 0).operation;
+        survivingWrite = destroyed.beginDispatch(0);
+    }
+    check(survivingWrite && !destroyed.permitsCleanup() && !destroyed.beginDispatch(1, false),
+          "a surviving writer cannot keep a destroyed coordinator open for more work");
+}
+
 void producerIntents()
 {
     TxCoordinator coordinator([](const auto&, auto) {});
@@ -426,6 +491,75 @@ void intentBoundaries()
     check(!orphan.pending() && !orphan.permitsDispatch(1),
           "coordinator destruction invalidates copied producer handles");
 }
+void producerMediaContexts()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    TxCoordinator foreign([](const auto&, auto) {});
+    const auto actor = coordinator.registerActor({true, 20});
+    const auto producer = coordinator.registerProducer();
+    const auto mic = coordinator.registerProducer(true);
+    const auto microphone = coordinator.mediaContext(mic);
+    check(!TxCoordinator::Context{}.permitsDispatch(0)
+              && !coordinator.mediaContext(producer).permitsDispatch(0),
+          "ordinary media needs an original admitted operation");
+    check(microphone.permitsDispatch(0) && !microphone.permitsDispatch(-1),
+          "explicit continuous microphone media permits RX, not invalid clock values");
+    auto micWrite = microphone.beginDispatch(0);
+    const auto first = coordinator.acquire(actor, 0).operation;
+    check(first.permitsDispatch(0) && bool(micWrite),
+          "an entered RX microphone write never refuses a fresh PTT intent");
+    const auto media = coordinator.mediaContext(producer, first);
+    check(media.permitsDispatch(19) && !media.permitsDispatch(20),
+          "media retains its admitted operation's exact deadline");
+    check(!foreign.mediaContext(producer, first).permitsDispatch(1)
+              && !coordinator.mediaContext(foreign.registerProducer(), first).permitsDispatch(1),
+          "producer and operation provenance cannot cross coordinators");
+    check(media.sameContext(coordinator.mediaContext(producer, first))
+              && !media.sameContext(coordinator.mediaContext(coordinator.registerProducer(), first)),
+          "contexts distinguish producers even under the shared actor");
+    const auto copy = producer;
+    copy.invalidate();
+    check(!producer.valid() && !media.permitsDispatch(1) && !media.beginDispatch(1),
+          "producer teardown fences copies and queued media without keying or stopping");
+    check(first.permitsDispatch(1), "producer invalidation does not cancel the shared operation");
+    coordinator.reset();
+    check(!microphone.permitsDispatch(1) && !microphone.beginDispatch(1)
+              && !coordinator.mediaContext(mic).permitsDispatch(1),
+          "connection reset fences queued continuous media and recovery cannot remint it");
+    check(!coordinator.acknowledgeStopped(first),
+          "transport teardown accounts for an already entered continuous write");
+    micWrite = {};
+    check(coordinator.acknowledgeStopped(first), "teardown may complete after the continuous writer returns");
+    const auto next = coordinator.acquire(actor, 2).operation;
+    check(next.permitsDispatch(2) && !microphone.permitsDispatch(2)
+              && coordinator.mediaContext(mic).permitsDispatch(2),
+          "a new session never adopts old microphone media");
+    bool workerRefused = false;
+    std::unique_ptr<QThread> worker(QThread::create([&] {
+        workerRefused = !coordinator.registerProducer().valid()
+            && !coordinator.mediaContext(mic).permitsDispatch(2);
+    }));
+    worker->start();
+    worker->wait();
+    check(workerRefused, "worker threads cannot mint media authority");
+    TxCoordinator::Context orphan;
+    TxCoordinator::Dispatch entered;
+    {
+        TxCoordinator temporary([](const auto&, auto) {});
+        orphan = temporary.mediaContext(temporary.registerProducer(true));
+        entered = orphan.beginDispatch(0);
+    }
+    check(entered && !orphan.permitsDispatch(1) && !orphan.beginDispatch(1),
+          "a surviving entered guard cannot keep a destroyed coordinator's media alive");
+    std::vector<TxCoordinator::Producer> registrations;
+    for (int i = 0; i < TxCoordinator::kMaximumProducers - 1; ++i) {
+        registrations.push_back(coordinator.registerProducer());
+    }
+    check(registrations.back().valid() && !coordinator.registerProducer().valid(),
+          "producer registration is bounded even when sessions retain handles");
+    registrations.front().invalidate();
+    check(coordinator.registerProducer().valid(), "invalidated producer slots can be reclaimed");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -441,6 +575,8 @@ int main(int argc, char** argv)
     acknowledgedCallbackCannotReenter();
     stopOnlyFences();
     producerIntents();
+    terminalDispatchBarrier();
     intentBoundaries();
+    producerMediaContexts();
     return failures ? 1 : 0;
 }

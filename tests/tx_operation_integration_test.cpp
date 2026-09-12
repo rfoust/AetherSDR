@@ -1,6 +1,7 @@
 // Socket-free production-path tests. Only an injected transport recorder is
 // used; no radio, peer, listener, discovery or transmitter is opened.
 #include "TestSettingsProfile.h"
+#include "TxTestAuthority.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "core/backends/flex/FlexBackend.h"
@@ -44,8 +45,8 @@ public:
     }
     static void bindTxEncoder(RadioModel& radio, FlexBackend& encoder)
     {
-        encoder.setTxCommandSink([&radio](const QString& command, bool keying) {
-            radio.sendTxKeyingCommand(command, keying);
+        encoder.setTxCommandSink([&radio](const QString& command, const TxCoordinator::Command& fence) {
+            radio.sendTxKeyingCommand(command, fence);
         });
     }
     static void injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands)
@@ -85,9 +86,10 @@ public:
     RadioCapabilities caps;
     bool connected{false};
     QString cwRejection;
-    std::function<void(bool)> keyingWriter;
-    std::function<void(bool)> tuneWriter;
-    std::function<void(bool)> atuWriter;
+    using Writer = std::function<void(bool, const TxCoordinator::Operation&, const TxCoordinator::Completion&)>;
+    Writer keyingWriter;
+    Writer tuneWriter;
+    Writer atuWriter;
     QStringList* commands;
     explicit RecordingBackend(QStringList& record) : commands(&record)
     {
@@ -104,30 +106,30 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool on) override
+    void setKeying(bool on, const TxCoordinator::Operation& operation, const TxCoordinator::Completion& completion) override
     {
         *commands << (on ? "mox:on" : "mox:off");
         if (keyingWriter) {
-            keyingWriter(on);
+            keyingWriter(on, operation, completion);
         }
     }
-    void setTune(bool on, int) override
+    void setTune(bool on, int, const TxCoordinator::Operation& operation, const TxCoordinator::Completion& completion) override
     {
         *commands << (on ? "tune:on" : "tune:off");
         if (tuneWriter) {
-            tuneWriter(on);
+            tuneWriter(on, operation, completion);
         }
     }
-    void setAtu(bool on) override
+    void setAtu(bool on, const TxCoordinator::Operation& operation, const TxCoordinator::Completion& completion) override
     {
         *commands << (on ? "atu:on" : "atu:off");
         if (atuWriter) {
-            atuWriter(on);
+            atuWriter(on, operation, completion);
         }
     }
-    void setCwKeying(bool on, bool, int) override { *commands << (on ? "cw:on" : "cw:off"); }
-    QString sendCwText(const QString& text) override { *commands << "cwx:" + text; return cwRejection; }
-    void abortCwText() override { *commands << "cwx:abort"; }
+    void setCwKeying(bool on, bool, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { *commands << (on ? "cw:on" : "cw:off"); }
+    QString sendCwText(const QString& text, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override { *commands << "cwx:" + text; return cwRejection; }
+    void abortCwText(const TxCoordinator::Operation&, const TxCoordinator::Completion&) override { *commands << "cwx:abort"; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 
@@ -165,7 +167,7 @@ void perIntentCompletion()
     check(TxOperationIntegrationTestAccess::moxIntent(f.radio).sameIntent(original),
           "repeated production MOX intent does not accumulate hidden holds");
     bool replace = true;
-    f.backend->keyingWriter = [&](bool on) {
+    f.backend->keyingWriter = [&](bool on, const auto&, const auto&) {
         if (!on && replace) {
             replace = false;
             f.radio.setTransmit(true);
@@ -393,25 +395,26 @@ void delayedReleaseAndReplacement()
 
 void flexEncoding()
 {
+    TxTestAuthority authority;
     QStringList commands;
     FlexBackend backend;
     backend.setCommandSink([&](const QString& command) { commands << command; });
-    backend.setKeying(true);
-    backend.setTune(true, 10);
-    backend.setAtu(true);
+    backend.setKeying(true, authority.operation);
+    backend.setTune(true, 10, authority.operation);
+    backend.setAtu(true, authority.operation);
     check(commands.isEmpty(), "primary Flex keying never falls back to an unfenced generic sink");
     std::vector<bool> keying;
-    backend.setTxCommandSink([&](const QString& command, bool on) {
+    backend.setTxCommandSink([&](const QString& command, const TxCoordinator::Command& fence) {
         commands << command;
-        keying.push_back(on);
+        keying.push_back(fence.keying);
     });
-    backend.setKeying(true);
-    backend.setKeying(false);
-    backend.setTune(true, 10);
-    backend.setTune(false, 10);
-    backend.setAtu(true);
-    backend.setAtu(false);
-    backend.abortCwText();
+    backend.setKeying(true, authority.operation);
+    backend.setKeying(false, authority.operation);
+    backend.setTune(true, 10, authority.operation);
+    backend.setTune(false, 10, authority.operation);
+    backend.setAtu(true, authority.operation);
+    backend.setAtu(false, authority.operation);
+    backend.abortCwText(authority.operation);
     check(commands == QStringList({"xmit 1", "xmit 0", "transmit tune 1", "transmit tune 0", "atu start", "atu bypass", "cwx clear"}),
           "Flex seam preserves exact FlexLib 4.2.18 keying command forms");
     check(keying == std::vector<bool>({true, false, true, false, true, false, false}),
@@ -432,9 +435,15 @@ void queuedPrimaryKeying()
         Fixture f;
         TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, wire);
         TxOperationIntegrationTestAccess::bindTxEncoder(f.radio, encoder);
-        f.backend->keyingWriter = [&encoder](bool on) { encoder.setKeying(on); };
-        f.backend->tuneWriter = [&encoder](bool on) { encoder.setTune(on, 10); };
-        f.backend->atuWriter = [&encoder](bool on) { encoder.setAtu(on); };
+        f.backend->keyingWriter = [&encoder](bool on, const auto& operation, const auto& completion) {
+            encoder.setKeying(on, operation, completion);
+        };
+        f.backend->tuneWriter = [&encoder](bool on, const auto& operation, const auto& completion) {
+            encoder.setTune(on, 10, operation, completion);
+        };
+        f.backend->atuWriter = [&encoder](bool on, const auto& operation, const auto& completion) {
+            encoder.setAtu(on, operation, completion);
+        };
         const auto setKeying = [&](bool on) {
             if (kind == 0) {
                 f.radio.setTransmit(on);
@@ -896,6 +905,25 @@ void overlappingCwContributions()
     }
 }
 
+void disconnectDuringEnteredWrite()
+{
+    Fixture f;
+    f.radio.setTransmit(true);
+    const auto operation = f.radio.transmitOperation();
+    auto dispatch = operation.beginDispatch(0, false);
+    check(bool(dispatch), "disconnect fixture holds an entered terminal write");
+    TxOperationIntegrationTestAccess::teardownWithPendingReply(f.radio, {});
+    auto& coordinator = TxOperationIntegrationTestAccess::coordinator(f.radio);
+    check(coordinator.recovering() && coordinator.hasInFlightDispatches(),
+          "transport teardown retains recovery while an entered writer returns");
+    dispatch = {};
+    QEventLoop loop;
+    QTimer::singleShot(30, &loop, &QEventLoop::quit);
+    loop.exec();
+    check(!coordinator.recovering() && !coordinator.hasInFlightDispatches(),
+          "teardown acknowledgment completes after dispatch return without a permanent latch");
+}
+
 void queuedNetCwEdges()
 {
     QList<QByteArray> packets;
@@ -1038,6 +1066,7 @@ int main(int argc, char** argv)
     primaryRoutes();
     perIntentCompletion();
     overlappingCwContributions();
+    disconnectDuringEnteredWrite();
     refusedStartsAndUnconditionalStops();
     localCompletionDoesNotAuthorizeHandoff();
     cwTuneMutualExclusion();

@@ -119,6 +119,9 @@ int main(int argc, char** argv)
     check(IcomSettings::wakeOnConnect(), "wake policy round-trips through the Icom document");
     IcomSettings::setWakeOnConnect(false);
     AudioEngine audio;
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto operation = coordinator.acquire(coordinator.registerActor({true, 0}), TxCoordinator::monotonicMs()).operation;
+    const auto context = coordinator.mediaContext(coordinator.registerProducer(), operation);
     IcomCivBackend backend;
     QString nickname;
     QStringList antennas;
@@ -147,7 +150,7 @@ int main(int argc, char** argv)
         check(pcm.size() == 1920 && clientLeveled, "TCI stereo PCM reaches the backend seam intact");
         ++audioFrames;
         // The real Icom submission gate must drop this while unkeyed.
-        backend.submitTxAudio(pcm, 24000, clientLeveled);
+        backend.submitTxAudio(pcm, 24000, clientLeveled, context);
     });
     const QByteArray pcm(960 * sizeof(float), '\0');
     for (const QString& name : {QStringLiteral("Shack portable"), QStringLiteral("IC-7300MK2"),
@@ -158,7 +161,7 @@ int main(int argc, char** argv)
         check(nickname == (name.isEmpty() ? QStringLiteral("Unknown Icom") : name),
               "the network name remains presentation text");
         const int before = audioFrames;
-        audio.feedDaxTxAudio(pcm);
+        audio.feedDaxTxAudio(pcm, context);
         check(audioFrames == before, "unidentified backend cannot receive TCI PCM");
         // IC-705 model ID A4 at customized bus address 94 (IC-7300's default).
         IcomCivBackendTestAccess::inject(backend, "fefee0941900a4fd");
@@ -170,7 +173,7 @@ int main(int argc, char** argv)
         check(nickname == (name.isEmpty() ? QStringLiteral("IC-705") : name),
               "identification preserves the nickname or supplies the empty-name fallback");
         check(!preamps.isEmpty(), "late identity publishes the front-end controls");
-        audio.feedDaxTxAudio(pcm);
+        audio.feedDaxTxAudio(pcm, context);
         check(audioFrames == before + 1, "late identification enables actual TCI PCM delivery");
         const int published = publications;
         IcomCivBackendTestAccess::inject(backend, "fefee0941900a4fd");
@@ -227,7 +230,7 @@ int main(int argc, char** argv)
               && !backend.capabilities().canTransmit && !audio.hostModulation(),
           "two responders with the SAME model ID revoke identity and the audio route");
     const int before = audioFrames;
-    audio.feedDaxTxAudio(pcm);
+    audio.feedDaxTxAudio(pcm, context);
     check(audioFrames == before, "capability withdrawal stops TCI PCM delivery");
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     check(!backend.capabilities().canTransmit, "late duplicate cannot undo ambiguous-bus rejection");

@@ -609,8 +609,11 @@ void MetisClient::requestPipelineReset()
     // on hardware, not just discrete tunes.
 }
 
-void MetisClient::setMox(bool keyed)
+void MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
 {
+    if (!TxCoordinator::Command{operation, keyed}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     if (keyed && !m_txAllowed) {
         // Fail SAFE and stay refused. Not an error return: a caller that could
         // retry past a refusal is exactly what this gate exists to prevent.
@@ -618,6 +621,7 @@ void MetisClient::setMox(bool keyed)
         return;
     }
     m_mox = keyed;
+    m_moxOperation = operation;
 }
 
 void MetisClient::setTxFrequencyHz(std::uint32_t hz)
@@ -647,8 +651,11 @@ void MetisClient::setTxDriveLevel(int level)
     m_oneShot.push_back(m_ccTxDrive);
 }
 
-void MetisClient::setCwKeyDown(bool down)
+void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation)
 {
+    if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     // Refuse the carrier at the same final wire authority that refuses MOX.
     // Do not even latch a pending down edge: opening the gate later must never
     // turn an earlier refused request into RF.
@@ -666,6 +673,7 @@ void MetisClient::setCwKeyDown(bool down)
     }
     m_cwMode = true;
     m_cwKeyDown = down;
+    m_cwOperation = operation;
 }
 
 void MetisClient::clearCwKeying()
@@ -679,8 +687,15 @@ void MetisClient::clearCwKeying()
     m_txIq.clear();
 }
 
-void MetisClient::queueTxIq(std::span<const std::complex<float>> iq)
+void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txIqContext.sameContext(context)) {
+        m_txIq.clear();
+        m_txIqContext = context;
+    }
     for (const auto& s : iq)
         m_txIq.push_back(s);
     // Drop the OLDEST on overflow: stale transmit audio is worse than a gap.
@@ -688,8 +703,12 @@ void MetisClient::queueTxIq(std::span<const std::complex<float>> iq)
         m_txIq.pop_front();
 }
 
-void MetisClient::setTxTestTone(double offsetHz, double amplitude)
+void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation)
 {
+    if (!TxCoordinator::Command{operation, amplitude > 0.0}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    m_toneOperation = operation;
     m_toneHz = offsetHz;
     m_toneAmp = amplitude < 0.0 ? 0.0 : (amplitude > 1.0 ? 1.0 : amplitude);
     if (m_toneAmp == 0.0)
@@ -703,6 +722,22 @@ void MetisClient::flushTxIq()
 
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
 {
+    const qint64 now = TxCoordinator::monotonicMs();
+    if (!m_moxOperation.permitsDispatch(now)) {
+        m_mox = false;
+    }
+    if (!m_cwOperation.permitsDispatch(now)) {
+        m_cwMode = false;
+        m_cwKeyDown = false;
+        m_cwEnvelope = 0.0;
+    }
+    if (!m_toneOperation.permitsDispatch(now)) {
+        m_toneAmp = 0.0;
+        m_tonePhase = 0.0;
+    }
+    if (!m_txIqContext.permitsDispatch(TxCoordinator::monotonicMs())) {
+        m_txIq.clear();
+    }
     static const Cc kCcAdc = ccAdcAssign();
     Cc b;
     if (!m_oneShot.empty()) {
@@ -804,6 +839,20 @@ void MetisClient::sendControlPacket()
     // device leaves every receiver unassigned (and therefore emits all-zero IQ)
     // until it has seen it. Re-asserting it rather than sending it once keeps a
     // device that reconnects or resets mid-session from silently going quiet.
+    TxCoordinator::Dispatch audioDispatch;
+    // Count the writer through sendTo(), including CW/TUNE packets which have
+    // no queued PCM. Cancellation cannot retract an already-entered write.
+    TxCoordinator::Dispatch keyDispatch = m_moxOperation.beginDispatch(
+        TxCoordinator::monotonicMs(), m_mox);
+    if (m_mox && !keyDispatch) {
+        m_mox = false;
+    }
+    if (!m_txIq.empty()) {
+        audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
+        if (!audioDispatch) {
+            m_txIq.clear();
+        }
+    }
     countTx(sendTo(*m_socket, buildNextControlPacket(), m_host, m_port));
 }
 

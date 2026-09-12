@@ -9,6 +9,7 @@
 // rather than trusting a status flag.
 
 #include "core/backends/hl2/MetisClient.h"
+#include "TxTestAuthority.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
@@ -61,6 +62,7 @@ static bool payloadNonZero(const std::array<std::uint8_t, kUsbPacketSize>& pkt)
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    TxTestAuthority authority;
     MetisClient client;
 
     {
@@ -88,7 +90,7 @@ int main(int argc, char** argv)
             check(!anyFrameKeyed(packet), "IO-board writes never key an unkeyed transmitter");
         }
         board.enableTransmit(true);
-        board.setMox(true);
+        board.setMox(true, authority.operation);
         board.setIoBoardTxFrequencyHz(14'225'000);
         bool sawBoard = false;
         for (int i = 0; i < 12; ++i) {
@@ -97,14 +99,14 @@ int main(int argc, char** argv)
             check(anyFrameKeyed(packet), "IO-board update preserves explicit key state");
         }
         check(sawBoard, "IO-board band update is not withheld while keyed");
-        board.setMox(false);
+        board.setMox(false, authority.operation);
     }
 
     check(!client.transmitEnabled(), "transmit is DISABLED by default");
     check(!client.isKeyed(), "not keyed by default");
 
     // ---- gate closed ----
-    client.setMox(true);
+    client.setMox(true, authority.operation);
     check(!client.isKeyed(), "setMox(true) refused while the gate is closed");
 
     // Drain enough packets to cover the whole round robin (freq, gain, ADC
@@ -112,7 +114,7 @@ int main(int argc, char** argv)
     // standing the entire time. Any single keyed frame here is a real radio
     // keyed by accident.
     for (int i = 0; i < 64; ++i) {
-        client.setMox(true);                       // keep asking, every frame
+        client.setMox(true, authority.operation);                       // keep asking, every frame
         const auto pkt = client.buildNextControlPacket();
         if (anyFrameKeyed(pkt)) {
             check(false, "a frame was keyed with the gate CLOSED");
@@ -160,7 +162,7 @@ int main(int argc, char** argv)
         }
     }
 
-    client.setMox(true);
+    client.setMox(true, authority.operation);
     check(client.isKeyed(), "setMox(true) honoured once the gate is open");
     {
         const auto pkt = client.buildNextControlPacket();
@@ -177,12 +179,12 @@ int main(int argc, char** argv)
     }
 
     // ---- unkey, and revoking the gate ----
-    client.setMox(false);
+    client.setMox(false, authority.operation);
     check(!anyFrameKeyed(client.buildNextControlPacket()), "unkeys cleanly");
 
     // Revoking the gate while keyed must drop the key on the wire immediately,
     // not merely refuse the next request.
-    client.setMox(true);
+    client.setMox(true, authority.operation);
     check(anyFrameKeyed(client.buildNextControlPacket()), "keyed again");
     client.enableTransmit(false);
     for (int i = 0; i < 8; ++i) {
@@ -202,7 +204,7 @@ int main(int argc, char** argv)
         std::vector<std::complex<float>> tone(512, std::complex<float>(0.5f, -0.5f));
 
         // Gate closed, unkeyed: queued samples must not go out.
-        c2.queueTxIq(tone);
+        c2.queueTxIq(tone, authority.context);
         check(c2.txQueueDepth() == 512, "samples queue regardless of gate state");
         for (int i = 0; i < 4; ++i) {
             if (payloadNonZero(c2.buildNextControlPacket())) {
@@ -218,7 +220,7 @@ int main(int argc, char** argv)
               "an open gate alone does not put IQ on the wire");
 
         // Keyed: now the samples flow.
-        c2.setMox(true);
+        c2.setMox(true, authority.operation);
         const auto keyedPkt = c2.buildNextControlPacket();
         check(payloadNonZero(keyedPkt), "keyed frames carry the queued IQ");
         check(c2.txQueueDepth() == 512 - kTxSamplesPerPacket,
@@ -233,13 +235,13 @@ int main(int argc, char** argv)
         // Unkey must discard pending audio, not carry it into the next
         // transmission. Measured on hardware before this existed: a key with no
         // audio still produced ~1000 counts of forward power for a moment.
-        c2.queueTxIq(tone);
+        c2.queueTxIq(tone, authority.context);
         check(c2.txQueueDepth() > 0, "audio queued");
         c2.flushTxIq();
         check(c2.txQueueDepth() == 0, "flushTxIq discards pending transmit audio");
         check(!payloadNonZero(c2.buildNextControlPacket()),
               "nothing left to transmit after a flush");
-        c2.queueTxIq(tone);
+        c2.queueTxIq(tone, authority.context);
 
         // Underflow is silence, not a stall and not repeated stale audio.
         while (c2.txQueueDepth() > 0)
@@ -251,20 +253,20 @@ int main(int argc, char** argv)
     // ---- PC/MIDI CW is a shaped, packet-paced carrier under MOX ----
     {
         MetisClient cw;
-        cw.setCwKeyDown(true);
+        cw.setCwKeyDown(true, authority.operation);
         check(!cw.cwModeActive(),
               "CW down is not latched while the transmit gate is closed");
         check(!payloadNonZero(cw.buildNextControlPacket()),
               "a refused CW edge puts no samples on the wire");
 
         cw.enableTransmit(true);
-        cw.setCwKeyDown(true);
+        cw.setCwKeyDown(true, authority.operation);
         check(cw.cwModeActive() && cw.cwKeyDown(),
               "an allowed CW down edge enters software-CW mode");
         check(!payloadNonZero(cw.buildNextControlPacket()),
               "CW still requires MOX — break-in policy belongs to the backend");
 
-        cw.setMox(true);
+        cw.setMox(true, authority.operation);
         bool sawCarrier = false;
         for (int i = 0; i < 5; ++i) {
             sawCarrier |= payloadNonZero(cw.buildNextControlPacket());
@@ -273,8 +275,8 @@ int main(int argc, char** argv)
 
         // Voice queued behind manual PTT must not leak between CW elements.
         std::vector<std::complex<float>> voice(512, std::complex<float>(0.4f, -0.4f));
-        cw.queueTxIq(voice);
-        cw.setCwKeyDown(false);
+        cw.queueTxIq(voice, authority.context);
+        cw.setCwKeyDown(false, authority.operation);
         for (int i = 0; i < 6; ++i) {
             cw.buildNextControlPacket();
         }
@@ -286,9 +288,56 @@ int main(int argc, char** argv)
               "ending the CW PTT envelope releases IQ ownership");
         check(!payloadNonZero(cw.buildNextControlPacket()),
               "ending CW drops microphone IQ queued during the element sequence");
-        cw.queueTxIq(voice);
+        cw.queueTxIq(voice, authority.context);
         check(payloadNonZero(cw.buildNextControlPacket()),
               "normal transmit IQ resumes after CW mode is cleared");
+    }
+
+    {
+        TxTestAuthority media;
+        MetisClient queued;
+        queued.enableTransmit(true);
+        queued.setMox(true, media.operation);
+        const std::vector<std::complex<float>> voice(252, {0.25f, 0.25f});
+        queued.queueTxIq(voice, media.context);
+        (void)media.coordinator.finishLocalIntent(media.operation);
+        const auto operation = media.coordinator.acquire(media.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        const auto context = media.coordinator.mediaContext(media.producer, operation);
+        check(!payloadNonZero(queued.buildNextControlPacket()) && queued.txQueueDepth() == 0,
+              "a new operation cannot consume old queued HL2 IQ");
+        queued.setMox(true, operation);
+        queued.queueTxIq(voice, context);
+        queued.queueTxIq(voice, media.context);
+        check(queued.txQueueDepth() == voice.size(), "late old IQ cannot append to the new producer queue");
+        media.producer.invalidate();
+        check(!payloadNonZero(queued.buildNextControlPacket()), "producer teardown fences already queued HL2 IQ");
+    }
+
+    {
+        TxTestAuthority tx;
+        MetisClient fenced;
+        fenced.enableTransmit(true);
+        fenced.setMox(true, {});
+        check(!anyFrameKeyed(fenced.buildNextControlPacket()),
+              "opening the transport gate never substitutes for an admitted operation");
+        fenced.setMox(true, tx.operation);
+        fenced.setTxTestTone(0.0, 0.5, tx.operation);
+        check(payloadNonZero(fenced.buildNextControlPacket()), "admitted tune carrier reaches the packet builder");
+        (void)tx.coordinator.finishLocalIntent(tx.operation);
+        const auto fresh = tx.coordinator.acquire(tx.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        fenced.setMox(true, fresh);
+        fenced.setMox(false, tx.operation);
+        fenced.setCwKeyDown(true, tx.operation);
+        fenced.setTxTestTone(0.0, 0.9, tx.operation);
+        const auto voice = fenced.buildNextControlPacket();
+        check(anyFrameKeyed(voice) && !payloadNonZero(voice),
+              "old key-up, CW and tone queues neither unkey nor modulate a fresh voice operation");
+        fenced.setCwKeyDown(true, fresh);
+        check(payloadNonZero(fenced.buildNextControlPacket()), "fresh CW still produces shaped IQ");
+        (void)tx.coordinator.cancel(tx.actor, fresh);
+        const auto stopped = fenced.buildNextControlPacket();
+        check(!anyFrameKeyed(stopped) && !payloadNonZero(stopped),
+              "cancellation fences latched MOX and internally generated CW at the packet builder");
     }
 
     if (g_failures == 0)

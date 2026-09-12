@@ -550,6 +550,7 @@ private:
     // handlers in MainWindow.cpp. (PR #4537 review.)
     bool m_rxMutedForPlayback{false};
     void wirePanStreamTxSink();               // MainWindow_Session.cpp
+    void wireTxAudioAuthority();              // MainWindow_Session.cpp
     void wirePanStreamTciSinks();             // MainWindow_Session.cpp
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
@@ -1800,6 +1801,7 @@ private:
     QMetaObject::Connection m_clockSliceAudioConn;  // seam per-slice audio feed — same lifetime
     void setupAetherClock();
 
+    TxCoordinator::Producer m_microphoneTxProducer;
 #ifdef HAVE_RADE
     RADEEngine* m_radeEngine{nullptr};
     QThread*    m_radeThread{nullptr};

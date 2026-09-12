@@ -1,4 +1,5 @@
 #pragma once
+#include "core/TxCoordinator.h"
 
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -12,6 +13,8 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+#include <optional>
+#include <functional>
 
 #include "core/backends/icom/IcomProtocol.h"
 
@@ -90,6 +93,8 @@ public:
     // replay — which presents as a retransmit request that can never be
     // satisfied and a stream that stalls behind it.
     void sendTracked(std::vector<std::uint8_t> packet);
+    void sendTrackedTxAudio(std::vector<std::uint8_t> packet, const TxCoordinator::Context& context);
+    void sendTrackedTxCommand(std::vector<std::uint8_t> packet, const TxCoordinator::Command& command);
 
     // Send without retention (handshake, pings, retransmit requests).
     void sendRaw(std::span<const std::uint8_t> packet);
@@ -136,12 +141,16 @@ private slots:
     void onReorderTick();
 
 private:
+    friend struct IcomStreamTestAccess;
+    std::function<void(std::span<const std::uint8_t>)> m_testWriter;
     void handleDatagram(const QByteArray& datagram);
     void handleRetransmitRequest(std::span<const std::uint8_t> pkt);
     void deliver(const QByteArray& packet);
     void queueForReorder(quint16 seq, const QByteArray& packet);
     void drainReorder();
-    void retain(quint16 seq, const std::vector<std::uint8_t>& packet);
+    void retain(quint16 seq, const std::vector<std::uint8_t>& packet,
+                const std::optional<TxCoordinator::Context>& context = {},
+                const std::optional<TxCoordinator::Command>& command = {});
 
 public:
     // The sequences currently held for retransmit, oldest first.
@@ -164,7 +173,9 @@ private:
     // isPayload false for keepalives: they are tracked (they consume a sequence
     // number and can be asked for) but must not reset the quiet clock, or the
     // idle cadence never relaxes.
-    void sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayload);
+    void sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayload,
+                         std::optional<TxCoordinator::Context> context = {},
+                         std::optional<TxCoordinator::Command> command = {});
 
     QUdpSocket* m_socket = nullptr;
     QTimer* m_idleTimer = nullptr;
@@ -194,7 +205,12 @@ private:
     // Replay buffer for packets the radio may ask us to resend. Bounded: past
     // a couple of hundred packets a retransmit request is archaeology, and an
     // unbounded map on the audio stream is an unbounded memory leak.
-    QMap<quint16, std::vector<std::uint8_t>> m_replay;
+    struct ReplayPacket {
+        std::vector<std::uint8_t> bytes;
+        std::optional<TxCoordinator::Context> context;
+        std::optional<TxCoordinator::Command> command;
+    };
+    QMap<quint16, ReplayPacket> m_replay;
     // Insertion order for m_replay, because the map is keyed by SEQUENCE and
     // the sequence space wraps. Evicting the map's lowest key drops the newest
     // packets once the counter rolls past 0xFFFF — see retain().

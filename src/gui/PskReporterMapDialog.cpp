@@ -1683,8 +1683,9 @@ void PskReporterMapDialog::stopBeacon(const QString& status, BeaconStopOutcome o
     // local unkey command so an external DAX source cannot leak into the tail.
     if (m_audioEngine != nullptr && m_audioEngine->wsprBeacon() != nullptr) {
         m_audioEngine->wsprBeacon()->stop();
-        QMetaObject::invokeMethod(
-            m_audioEngine, &AudioEngine::stopWsprPump, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_audioEngine, [audio = m_audioEngine, context = m_beaconContext] {
+            audio->stopWsprPumpIfCurrent(context);
+        }, Qt::QueuedConnection);
     }
     m_beaconButton->setText(tr("Transmit once"));
     setBeaconControlsEnabled(true);
@@ -1848,8 +1849,6 @@ void PskReporterMapDialog::updateBeaconState()
     beacon->start(encoded.symbols, m_beaconTone->value(),
                   static_cast<float>(m_beaconLevel->value()),
                   preRollFrames, skipFrames);
-    QMetaObject::invokeMethod(
-        m_audioEngine, &AudioEngine::startWsprPump, Qt::QueuedConnection);
     m_beaconStopDeadlineMs = QDateTime::currentMSecsSinceEpoch() + 115000;
     TransmitModel& tx = m_radioModel->transmitModel();
     tx.requestPttOn(TransmitModel::PttSource::Wspr);
@@ -1858,6 +1857,13 @@ void PskReporterMapDialog::updateBeaconState()
         stopBeacon(tr("Transmit request was blocked"));
         return;
     }
+    if (!m_beaconProducer.valid()) {
+        m_beaconProducer = m_radioModel->registerTxProducer(this);
+    }
+    m_beaconContext = m_radioModel->captureTxMedia(m_beaconProducer);
+    QMetaObject::invokeMethod(m_audioEngine, [audio = m_audioEngine, context = m_beaconContext] {
+        audio->startWsprPump(context);
+    }, Qt::QueuedConnection);
     m_beaconTransmitting = true;
     m_beaconButton->setText(tr("Stop"));
     setBeaconStatus(tr("Transmitting · pre-roll"), "color.highlight.tx");

@@ -7,6 +7,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "TestSettingsProfile.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 #include <algorithm>
@@ -236,11 +237,13 @@ int main(int argc, char** argv)
                       "MK2 periodic polling includes CW, squelch and active data TBW");
             }
             for (const bool reverse : {false, true}) {
+                TxTestAuthority authority;
                 IcomCivBackend cwBackend;
+                cwBackend.setTransmitContext(authority.context);
                 IcomCivBackendTestAccess::prepareSession(cwBackend, *ic7300Mk2);
                 IcomCivBackendTestAccess::selectCwMode(cwBackend, reverse);
                 const int power = IcomCivBackendTestAccess::power(cwBackend);
-                cwBackend.setTune(true, 3);
+                cwBackend.setTune(true, 3, authority.operation);
                 check(!IcomCivBackendTestAccess::tuning(cwBackend)
                           && IcomCivBackendTestAccess::power(cwBackend) == power
                           && IcomCivBackendTestAccess::lastOutboundCiv(cwBackend).isEmpty(),

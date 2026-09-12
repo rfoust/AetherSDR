@@ -835,6 +835,9 @@ public:
     // Snapshot for engine-owned deferred release. This is not a credential or
     // an invitation to borrow whichever operation happens to be current later.
     TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
+    // Trusted composition only. A producer is a lifetime, not an actor grant.
+    TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
+    TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
     // Best-effort stop of this captured compatibility operation only. This is
     // not a cancellation/recovery acknowledgment or proof that RF has stopped.
     void requestTransmitStop(const TxCoordinator::Operation& operation);
@@ -1386,10 +1389,10 @@ public:
     // AudioEngine's source decision through: true for external TCI/DAX client
     // audio, whose level the sender owns (#4796).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       bool clientLeveled);
+                       bool clientLeveled, const TxCoordinator::Context& context);
     // Ordered completion barrier for a finite modem stream. The token lets the
     // producer reject a stale completion from an aborted transmission.
-    void finishTxAudio(quint64 token);
+    void finishTxAudio(quint64 token, const TxCoordinator::Context& context);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1777,6 +1780,7 @@ private:
     TxCoordinator m_txCoordinator;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
+    TxCoordinator::Producer m_backendTxProducer;
     using TxActivity = TxCoordinator::Activity;
     // One handle per existing compatibility entry point, not per client yet.
     // Future producers retain their own handles rather than sharing these slots.
@@ -1794,8 +1798,10 @@ private:
     void endLocalTxActivity(const TxCoordinator::Intent& intent);
     unsigned activeTxActivities() const;
     void completeLocalTxIfDrained();
+    void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
-    void sendTxKeyingCommand(const QString& command, bool keying);
+    void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
+    TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation);
     void sendCwxCommand(const QString& command, bool keying, ResponseCallback reply = {});
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();

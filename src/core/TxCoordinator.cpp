@@ -1,10 +1,50 @@
 #include "TxCoordinator.h"
 
+#include <QScopeGuard>
+
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <utility>
 
 namespace AetherSDR {
+
+qint64 TxCoordinator::monotonicMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+TxCoordinator::Dispatch::Dispatch(std::shared_ptr<Identity> identity, bool continuous)
+    : m_identity(std::move(identity)), m_continuous(continuous)
+{
+}
+
+TxCoordinator::Dispatch::~Dispatch()
+{
+    if (m_identity) {
+        (m_continuous ? m_identity->continuousDispatches : m_identity->dispatches)
+            .fetch_sub(1, std::memory_order_release);
+    }
+}
+
+TxCoordinator::Dispatch::Dispatch(Dispatch&& other) noexcept
+    : m_identity(std::move(other.m_identity)), m_continuous(other.m_continuous)
+{
+}
+
+TxCoordinator::Dispatch& TxCoordinator::Dispatch::operator=(Dispatch&& other) noexcept
+{
+    if (this != &other) {
+        if (m_identity) {
+            (m_continuous ? m_identity->continuousDispatches : m_identity->dispatches)
+                .fetch_sub(1, std::memory_order_release);
+        }
+        m_identity = std::move(other.m_identity);
+        m_continuous = other.m_continuous;
+    }
+    return *this;
+}
 
 bool TxCoordinator::Operation::permitsDispatch(qint64 now) const
 {
@@ -29,7 +69,34 @@ bool TxCoordinator::Operation::permitsCleanup() const
         return false;
     }
     const std::shared_ptr<Identity> identity = m_state->actor->coordinator.lock();
-    return identity && identity->generation.load(std::memory_order_acquire) == m_state->generation;
+    return identity && identity->alive.load(std::memory_order_acquire)
+        && identity->generation.load(std::memory_order_acquire) == m_state->generation;
+}
+
+TxCoordinator::Dispatch TxCoordinator::Operation::beginDispatch(qint64 now, bool keying) const
+{
+    if (!m_state) {
+        return {};
+    }
+    const std::shared_ptr<Identity> identity = m_state->actor->coordinator.lock();
+    if (!identity) {
+        return {};
+    }
+    quint64 count = identity->dispatches.load(std::memory_order_acquire);
+    do {
+        if (count >= Identity::kChangingGeneration - 1) {
+            return {};
+        }
+    } while (!identity->dispatches.compare_exchange_weak(
+        count, count + 1, std::memory_order_acquire, std::memory_order_relaxed));
+    Dispatch dispatch(identity);
+    // Increment before checking validity. Either cancellation wins this check,
+    // or the entered write stays counted through its return. Admission cannot
+    // change generation between this check and the terminal writer.
+    if (!permitsCleanup() || (keying && !permitsDispatch(now))) {
+        return {};
+    }
+    return dispatch;
 }
 
 bool TxCoordinator::Intent::pending() const
@@ -48,17 +115,82 @@ bool TxCoordinator::Intent::sameIntent(const Intent& other) const
     return m_state && m_state == other.m_state;
 }
 
+bool TxCoordinator::Producer::valid() const
+{
+    if (!m_state || !m_state->valid.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const std::shared_ptr<Identity> identity = m_state->coordinator.lock();
+    return identity && identity->alive.load(std::memory_order_acquire);
+}
+
+bool TxCoordinator::Producer::sameProducer(const Producer& other) const
+{
+    return m_state && m_state == other.m_state;
+}
+
+void TxCoordinator::Producer::invalidate() const
+{
+    if (m_state) {
+        m_state->valid.store(false, std::memory_order_release);
+    }
+}
+
+bool TxCoordinator::Context::permitsDispatch(qint64 now) const
+{
+    if (now < 0 || !m_producer.valid()) {
+        return false;
+    }
+    const std::shared_ptr<Identity> identity = m_producer.m_state->coordinator.lock();
+    return identity && identity->session.load(std::memory_order_acquire) == m_session
+        && (m_continuous || m_operation.permitsDispatch(now));
+}
+
+TxCoordinator::Dispatch TxCoordinator::Context::beginDispatch(qint64 now) const
+{
+    if (!m_producer.m_state) {
+        return {};
+    }
+    const std::shared_ptr<Identity> identity = m_producer.m_state->coordinator.lock();
+    if (!identity) {
+        return {};
+    }
+    std::atomic<quint64>& dispatches = m_continuous
+        ? identity->continuousDispatches : identity->dispatches;
+    quint64 count = dispatches.load(std::memory_order_acquire);
+    do {
+        if (count >= Identity::kChangingGeneration - 1) {
+            return {};
+        }
+    } while (!dispatches.compare_exchange_weak(
+        count, count + 1, std::memory_order_acquire, std::memory_order_relaxed));
+    Dispatch dispatch(identity, m_continuous);
+    if (!permitsDispatch(now)) {
+        return {};
+    }
+    return dispatch;
+}
+
+bool TxCoordinator::Context::sameContext(const Context& other) const
+{
+    return m_producer.sameProducer(other.m_producer) && m_session == other.m_session
+        && m_continuous == other.m_continuous
+        && (m_continuous || m_operation.sameOperation(other.m_operation));
+}
+
 TxCoordinator::TxCoordinator(StopHandler stopHandler)
     : m_thread(QThread::currentThread())
     , m_identity(std::make_shared<Identity>())
     , m_stopHandler(std::move(stopHandler))
 {
+    qRegisterMetaType<Context>();
 }
 
 TxCoordinator::~TxCoordinator()
 {
     // The owner performs reset while its backend is alive. Destruction is a
     // final fence only: callbacks into a partially destroyed owner are unsafe.
+    m_identity->alive.store(false, std::memory_order_release);
     if (m_active.m_state) {
         m_active.m_state->cancelled.store(true, std::memory_order_release);
     }
@@ -77,13 +209,15 @@ bool TxCoordinator::onThread() const
 
 bool TxCoordinator::validActor(const Actor& actor) const
 {
-    return actor.m_state && !actor.m_state->revoked
+    return m_identity->alive.load(std::memory_order_acquire)
+        && actor.m_state && !actor.m_state->revoked
         && actor.m_state->coordinator.lock() == m_identity;
 }
 
 TxCoordinator::Actor TxCoordinator::registerActor(ActorPolicy policy)
 {
-    if (!onThread() || policy.maximumOperationMs < 0 || !m_stopHandler) {
+    if (!onThread() || !m_identity->alive.load(std::memory_order_acquire)
+        || policy.maximumOperationMs < 0 || !m_stopHandler) {
         return {};
     }
     std::erase_if(m_actors, [](const std::weak_ptr<ActorState>& actor) {
@@ -97,6 +231,43 @@ TxCoordinator::Actor TxCoordinator::registerActor(ActorPolicy policy)
     actor.m_state = std::make_shared<ActorState>(ActorState{m_identity, policy, false});
     m_actors.push_back(actor.m_state);
     return actor;
+}
+
+TxCoordinator::Producer TxCoordinator::registerProducer(bool continuousMicrophone)
+{
+    if (!onThread() || !m_identity->alive.load(std::memory_order_acquire)) {
+        return {};
+    }
+    std::erase_if(m_producers, [](const std::weak_ptr<ProducerState>& weak) {
+        const std::shared_ptr<ProducerState> producer = weak.lock();
+        return !producer || !producer->valid.load(std::memory_order_acquire);
+    });
+    if (m_producers.size() >= kMaximumProducers) {
+        return {};
+    }
+    Producer producer;
+    producer.m_state = std::make_shared<ProducerState>();
+    producer.m_state->coordinator = m_identity;
+    producer.m_state->continuousMicrophone = continuousMicrophone;
+    m_producers.push_back(producer.m_state);
+    return producer;
+}
+
+TxCoordinator::Context TxCoordinator::mediaContext(const Producer& producer, const Operation& operation) const
+{
+    if (!onThread() || recovering() || !producer.valid() || producer.m_state->coordinator.lock() != m_identity
+        || (!producer.m_state->continuousMicrophone
+            && (!m_active.sameOperation(operation) || m_active.m_state->cancelled.load(std::memory_order_acquire)))) {
+        return {};
+    }
+    Context context;
+    context.m_producer = producer;
+    context.m_session = m_identity->session.load(std::memory_order_acquire);
+    context.m_continuous = producer.m_state->continuousMicrophone;
+    if (!context.m_continuous) {
+        context.m_operation = operation;
+    }
+    return context;
 }
 
 TxCoordinator::Admission TxCoordinator::acquire(const Actor& actor, qint64 now)
@@ -132,6 +303,16 @@ TxCoordinator::Admission TxCoordinator::acquire(const Actor& actor, qint64 now)
     if (m_identity->generation.load() == std::numeric_limits<quint64>::max()) {
         return {{}, Refusal::Recovering};
     }
+    quint64 expected = 0;
+    if (!m_identity->dispatches.compare_exchange_strong(
+            expected, Identity::kChangingGeneration, std::memory_order_acquire)) {
+        // No delayed acquisition: an in-flight old write requires fresh intent
+        // after it returns, not a surprise transmission when a queue drains.
+        return {{}, Refusal::Recovering};
+    }
+    const auto releaseGeneration = qScopeGuard([this] {
+        m_identity->dispatches.store(0, std::memory_order_release);
+    });
     m_active.m_state = std::make_shared<OperationState>();
     m_active.m_state->actor = actor.m_state;
     m_active.m_state->startedMs = m_unconfirmed.m_state
@@ -324,6 +505,11 @@ void TxCoordinator::expire(qint64 now)
 void TxCoordinator::reset()
 {
     if (onThread()) {
+        if (m_identity->session.load() == std::numeric_limits<quint64>::max()) {
+            m_identity->alive.store(false, std::memory_order_release);
+        } else {
+            ++m_identity->session;
+        }
         stop(StopReason::Reset);
         // A transport can survive a reconnect. Fence old queued key-ups too,
         // before that same socket is ever reused for a new radio connection.
@@ -345,6 +531,22 @@ bool TxCoordinator::acknowledgeStopped(const Operation& operation)
     if (!onThread()) {
         return false;
     }
+    quint64 expected = 0;
+    if (!m_identity->dispatches.compare_exchange_strong(
+            expected, Identity::kChangingGeneration, std::memory_order_acquire)) {
+        return false;
+    }
+    const auto releaseGeneration = qScopeGuard([this] {
+        m_identity->dispatches.store(0, std::memory_order_release);
+    });
+    expected = 0;
+    if (!m_identity->continuousDispatches.compare_exchange_strong(
+            expected, Identity::kChangingGeneration, std::memory_order_acquire)) {
+        return false;
+    }
+    const auto releaseContinuous = qScopeGuard([this] {
+        m_identity->continuousDispatches.store(0, std::memory_order_release);
+    });
     if (m_stopping.sameOperation(operation)) {
         m_stopping = {};
         return true;
@@ -359,6 +561,14 @@ bool TxCoordinator::acknowledgeStopped(const Operation& operation)
 bool TxCoordinator::recovering() const
 {
     return onThread() && bool(m_stopping.m_state);
+}
+
+bool TxCoordinator::hasInFlightDispatches() const
+{
+    return (m_identity->dispatches.load(std::memory_order_acquire)
+            & ~Identity::kChangingGeneration) != 0
+        || (m_identity->continuousDispatches.load(std::memory_order_acquire)
+            & ~Identity::kChangingGeneration) != 0;
 }
 
 } // namespace AetherSDR

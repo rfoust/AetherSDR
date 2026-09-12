@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "models/RadioModel.h"
 #include "core/tnc/AetherAx25LibmodemShim.h"
 
 #include <QByteArray>
@@ -346,6 +347,8 @@ private:
     // Identifies the current transmission so deferred work armed on its behalf
     // (the DAX stream-wait timeout) cannot act on a later one.
     quint64 m_txGeneration{0};
+    TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Context m_txContext;
     QMetaObject::Connection m_txPttConfirmConnection;
     QMetaObject::Connection m_txPttConfirmedConnection;
 

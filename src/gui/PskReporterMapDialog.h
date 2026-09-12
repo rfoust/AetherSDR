@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "models/RadioModel.h"
 
 #include <QTimer>
 
@@ -77,6 +78,8 @@ private:
 
     AudioEngine*         m_audioEngine{nullptr};
     RadioModel*         m_radioModel{nullptr};
+    TxCoordinator::Producer m_beaconProducer;
+    TxCoordinator::Context m_beaconContext;
     PskReporterClient*  m_client{nullptr};
     PskReporterClient*  m_globalClient{nullptr};
     PropForecastClient* m_propForecast{nullptr};

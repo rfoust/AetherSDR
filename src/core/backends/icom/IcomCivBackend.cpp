@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QJsonDocument>
 #include <QLoggingCategory>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QVariant>
 
@@ -1354,7 +1355,14 @@ bool IcomCivBackend::adoptCivIdentity(std::uint8_t address, std::uint8_t modelId
         // Release the destination previously selected by this session before
         // withdrawing its profile. Do not redirect an unkey to the seed address.
         if (m_keyed || m_tuning || m_pendingPttIntent.value_or(false)) {
-            setKeying(false);
+            if (m_lastTxOperation.permitsCleanup()) {
+                setKeying(false, m_lastTxOperation);
+            } else {
+                // No locally admitted operation: retain the existing one-way
+                // identity-withdrawal stop for radio-originated PTT as well.
+                // This is never a key-on or an ownership acknowledgment.
+                applyKeying(false, {});
+            }
         }
         m_model = &unknownModel();
         if (m_civDetectTimer) {
@@ -3230,8 +3238,17 @@ void IcomCivBackend::onAudio(const std::vector<float>& mono)
 }
 
 void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                                   bool clientLeveled)
+                                   bool clientLeveled, const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txAudioContext.sameContext(context)) {
+        if (m_txResampler) {
+            m_txResampler->reset();
+        }
+        m_txAudioContext = context;
+    }
     // The flag is the HL2's concern: this backend ships PCM to a radio that
     // runs its own transmit processing, so there is no host ALC here to bypass.
     Q_UNUSED(clientLeveled);
@@ -3318,7 +3335,7 @@ void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRate
     }
 
     appendAx25PostResampleCapture(mono);
-    m_session->sendAudio(mono);
+    m_session->sendAudio(mono, context);
 }
 
 // The transmit-audio admission gate, shared by the seam feed, the TUNE tone
@@ -3344,8 +3361,12 @@ bool IcomCivBackend::txAudioGateOpen() const
     return m_keyed;
 }
 
-int IcomCivBackend::finishTxAudio()
+int IcomCivBackend::finishTxAudio(const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())
+        || !m_txAudioContext.sameContext(context)) {
+        return 0;
+    }
     if (!m_session || !m_connected || !txAudioGateOpen() || m_tuning) {
         if (m_txResampler) {
             m_txResampler->reset();
@@ -3371,11 +3392,11 @@ int IcomCivBackend::finishTxAudio()
             const std::span<const float> mono(
                 samples, static_cast<std::size_t>(tail.size() / sizeof(float)));
             appendAx25PostResampleCapture(mono);
-            m_session->sendAudio(mono);
+            m_session->sendAudio(mono, context);
             drainedSamples = tail.size() / static_cast<int>(sizeof(float));
         }
     }
-    const std::size_t paddedBytes = m_session->padTxAudioToFrame();
+    const std::size_t paddedBytes = m_session->padTxAudioToFrame(context);
     // What is actually still queued, host plus radio — not the packetizer's
     // worst case. After padding, a normal packet holds a single 20 ms frame.
     const int drainMs = m_session->txAudioDrainMs();
@@ -3397,7 +3418,8 @@ void IcomCivBackend::onTuneAudioTick()
 
 void IcomCivBackend::queueTuneAudioFrame()
 {
-    if (!m_session || !m_connected) {
+    const TxCoordinator::Context context = m_tuneContext;
+    if (!m_session || !m_connected || !context.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
 
@@ -3411,7 +3433,7 @@ void IcomCivBackend::queueTuneAudioFrame()
             m_tunePhase -= 2.0 * M_PI;
         }
     }
-    m_session->sendAudio(mono);
+    m_session->sendAudio(mono, context);
 }
 
 int IcomCivBackend::stopTuneProducer()
@@ -3578,7 +3600,7 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
                                 const std::string& key,
                                 IcomCivScheduler::Priority priority,
                                 bool supersedes,
-                                bool coalesce)
+                                bool coalesce, const std::optional<TxCoordinator::Command>& command)
 {
     IcomCivScheduler::Request request;
     request.frame = frame;
@@ -3588,6 +3610,7 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
     request.acceptsGenericReply = true;
     request.supersedes = supersedes;
     request.coalesce = coalesce;
+    request.txCommand = command;
     m_civScheduler.enqueue(std::move(request), nowMs());
 }
 
@@ -3614,6 +3637,11 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
         serviceSchedulerWaiters(nowMs);
         return;
     }
+    const auto consumed = qScopeGuard([command = dispatch->txCommand] {
+        if (command) {
+            command->completion.finish();
+        }
+    });
     // ROUTINE = the high-rate loops only.  `>= Ptt` also swept up Control and
     // Maintenance, which hid the startup snapshot and the scope on/output
     // writes from the default `civ trace` — the frames behind the documented
@@ -3638,7 +3666,7 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
         m_lastOutboundCivKey = QString::fromStdString(dispatch->key);
         m_lastOutboundCivAtMs = nowMs;
     }
-    m_session->sendCiv(dispatch->frame);
+    m_session->sendCiv(dispatch->frame, dispatch->txCommand);
     serviceSchedulerWaiters(nowMs);
 }
 
@@ -3846,8 +3874,12 @@ void IcomCivBackend::terminateScheduler(
     serviceSchedulerWaiters(nowMs(), waiterOutcome, diagnostics);
 }
 
-void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
+void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame,
+                                    const std::optional<TxCoordinator::Command>& command)
 {
+    if (command && !command->permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     if (!m_session || !m_connected)
         return;
     const qint64 now = nowMs();
@@ -3860,7 +3892,8 @@ void IcomCivBackend::sendUserCommand(const std::vector<std::uint8_t>& frame)
         && parsed->hasSub && parsed->sub == control::kPtt
         && !parsed->data.empty() && parsed->data.front() == 0;
     queueWrite(frame, key, failSafeUnkey ? IcomCivScheduler::Priority::Emergency
-                                        : IcomCivScheduler::Priority::Operator);
+                                        : IcomCivScheduler::Priority::Operator,
+               true, true, command);
     if (const auto confirmation = confirmationFor(frame)) {
         // Let the radio apply the write before asking.  The confirmation has
         // the same semantic generation, while any read already on the wire is
@@ -4579,21 +4612,25 @@ void IcomCivBackend::setVox(bool on, int level, int delayMs)
 // There is no command to ask whether an external tuner is attached, so only an
 // exact model profile with a documented tuner path may send this command. The
 // IC-9700 has no such path.
-void IcomCivBackend::setAtu(bool start)
+void IcomCivBackend::setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
-    if (!sendTunerCommandIfSupported(start)) {
+    if (!sendTunerCommandIfSupported(start, operation, completion)) {
         qCWarning(lcIcomTx)
             << "refusing antenna-tuner command: unsupported by active Icom profile";
     }
 }
 
-bool IcomCivBackend::sendTunerCommandIfSupported(bool start)
+bool IcomCivBackend::sendTunerCommandIfSupported(bool start, const TxCoordinator::Operation& operation,
+                                               const TxCoordinator::Completion& completion)
 {
+    if (!TxCoordinator::Command{operation, start}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return false;
+    }
     if (!tunerSupported()) {
         return false;
     }
     sendUserCommand(cmdSetTuner(m_session ? m_session->civAddress() : 0xA4,
-                                start ? 0x02 : 0x00));
+                                start ? 0x02 : 0x00), TxCoordinator::Command{operation, start, completion});
     // sendUserCommand queues a readback after the radio has applied the write;
     // that confirmation is also what lets the transient tuning state settle.
     return true;
@@ -4924,8 +4961,11 @@ bool IcomCivBackend::refuseKeyingInReceiveOnlyMode()
     return true;
 }
 
-void IcomCivBackend::setKeying(bool key)
+void IcomCivBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (!TxCoordinator::Command{operation, key}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     if (key && !m_model->hasTransmit) {
         return; // identity withdrawal must never swallow an unkey
     }
@@ -4937,15 +4977,30 @@ void IcomCivBackend::setKeying(bool key)
     if (key && refuseKeyingInReceiveOnlyMode())
         return;
 
+    applyKeying(key, TxCoordinator::Command{operation, key, completion});
+}
+
+void IcomCivBackend::applyKeying(bool key, const std::optional<TxCoordinator::Command>& command)
+{
+    // An unfenced call exists only for the one-way identity-withdrawal stop
+    // above. Ambiguity remains latched until reconnect, which destroys the
+    // serial replay cache; it can neither admit TX nor cross a new session.
+    if (key && (!command || !command->permitsDispatch(TxCoordinator::monotonicMs()))) {
+        return;
+    }
     // TUNE is an audio-source lease, not merely the TUNE button's latch. Every
     // unkey path ends that lease before the PTT-off command leaves: MOX, CW PTT,
     // automation/watchdog release and setTune(false) all converge here.
     const int restoreTunePower = !key ? stopTuneProducer() : -1;
+    if (command) {
+        m_lastTxOperation = command->operation;
+    }
 
     m_pendingPttIntent = key;
     m_pendingPttUntilMs = nowMs() + 1000;
     m_pttIncidentReported = false;
-    sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key));
+    sendUserCommand(cmdSetPtt(m_session ? m_session->civAddress() : 0xA4, key),
+                    command);
     // DO NOT publish intent as radio state. The scheduler sends a confirming
     // 1C 00 read and the normal 250 ms fallback poll keeps asking. Only that
     // decoded reply moves m_keyed, the meters, and transmitChanged. Publishing
@@ -4989,8 +5044,15 @@ void IcomCivBackend::clearDerivedForwardPower()
     emit meterUpdate(QStringLiteral("TX:FWDPWR"), 0.0);
 }
 
-void IcomCivBackend::setTune(bool on, int tunePowerPercent)
+void IcomCivBackend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (!TxCoordinator::Command{operation, on}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    const TxCoordinator::Context context = transmitContext();
+    if (on && !context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     // THERE IS NO TUNE-CARRIER COMMAND. `1C 01` is the antenna tuner, which is
     // a different feature and may not even be attached. A steady tune carrier
     // is COMPOSED: set the drive, then key. The mode save/restore that a full
@@ -5021,19 +5083,20 @@ void IcomCivBackend::setTune(bool on, int tunePowerPercent)
         // Raise the tone BEFORE keying, so no part of the keyed window is
         // silent — a tuner sampling that edge can otherwise read infinite SWR.
         m_tuning = true;
+        m_tuneContext = context;
         m_tunePhase = 0.0;
         // This priming frame intentionally precedes the optimistic keyed edge.
         // Periodic ticks are keyed-gated; keeping the one-shot generator
         // separate prevents that fail-closed guard from deleting the prime.
         queueTuneAudioFrame();
-        setKeying(true);
+        setKeying(true, operation, completion);
         m_tuneTimer->start();
         return;
     }
 
     // Unkey BEFORE restoring ordinary RF power. The tune setpoint is temporary
     // and must not become the radio's new operating drive after the carrier.
-    setKeying(false);
+    setKeying(false, operation, completion);
 }
 
 void IcomCivBackend::setTxPower(int percent)
@@ -5043,8 +5106,11 @@ void IcomCivBackend::setTxPower(int percent)
                                 level::kRfPower, percentToLevelRaw(m_txPowerPercent)));
 }
 
-QString IcomCivBackend::sendCwText(const QString& text)
+QString IcomCivBackend::sendCwText(const QString& text, const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (!operation.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return QStringLiteral("transmit operation is no longer admitted");
+    }
     if (!m_session || !m_connected) {
         return QStringLiteral("radio is not connected");
     }
@@ -5074,18 +5140,19 @@ QString IcomCivBackend::sendCwText(const QString& text)
                    std::string_view(ascii.constData(),
                                     static_cast<std::size_t>(ascii.size()))),
                "cw.message", IcomCivScheduler::Priority::Operator,
-               false, false);
+               false, false, TxCoordinator::Command{operation, true, completion});
     pumpCiv(nowMs());
     return {};
 }
 
-void IcomCivBackend::abortCwText()
+void IcomCivBackend::abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
     if (!m_session || !m_connected) {
         return;
     }
     queueWrite(cmdAbortCwMessage(m_session->civAddress()), "cw.message",
-               IcomCivScheduler::Priority::Emergency, true, true);
+               IcomCivScheduler::Priority::Emergency, true, true,
+               TxCoordinator::Command{operation, false, completion});
     pumpCiv(nowMs());
 }
 

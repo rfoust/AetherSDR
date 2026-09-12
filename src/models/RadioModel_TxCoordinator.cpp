@@ -2,14 +2,32 @@
 #include "core/LogManager.h"
 
 #include <QPointer>
-#include <chrono>
 
 namespace AetherSDR {
 
 qint64 RadioModel::txMonotonicMs()
 {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return TxCoordinator::monotonicMs();
+}
+
+TxCoordinator::Producer RadioModel::registerTxProducer(QObject* lifetime, bool continuousMicrophone)
+{
+    if (!lifetime || QThread::currentThread() != thread()) {
+        return {};
+    }
+    const TxCoordinator::Producer producer = m_txCoordinator.registerProducer(continuousMicrophone);
+    connect(lifetime, &QObject::destroyed, this, [producer] {
+        producer.invalidate();
+    }, Qt::DirectConnection); // atomic invalidation; never touches a model
+    return producer;
+}
+
+TxCoordinator::Context RadioModel::captureTxMedia(const TxCoordinator::Producer& producer) const
+{
+    if (QThread::currentThread() != thread() || m_txSessionClosing || !m_backend) {
+        return {};
+    }
+    return m_txCoordinator.mediaContext(producer, m_txOperation);
 }
 
 bool RadioModel::beginLocalTxActivity(TxActivity activity)
@@ -34,6 +52,14 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
         ? QStringLiteral("tune-start")
         : activity == TxActivity::Mox ? QStringLiteral("xmit") : QStringLiteral("cw-key");
     if (transmitStartBlockedByInhibit(gate)) {
+        return false;
+    }
+    if (!m_backendTxProducer.valid()) {
+        m_backendTxProducer = registerTxProducer(m_backend.get());
+    }
+    if (!m_backendTxProducer.valid()) {
+        emitInterlockNotification(tr("Transmit producer capacity is exhausted."),
+                                  QStringLiteral("tx-producer-capacity"));
         return false;
     }
     const TxCoordinator::Admission admission = m_txCoordinator.acquire(m_desktopTxActor, txMonotonicMs());
@@ -70,9 +96,14 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
         // leaving it to be diagnosed from a silent refusal. See
         // TxCoordinator::acknowledgeStopped().
         if (admission.refusal == TxCoordinator::Refusal::Recovering) {
-            qCWarning(lcProtocol)
-                << "RadioModel: TX refused — coordinator stop is unacknowledged;"
-                << "admission stays closed until the session ends";
+            if (m_txCoordinator.hasInFlightDispatches()) {
+                qCWarning(lcProtocol) << "RadioModel: TX refused — preceding terminal writer still entered;"
+                                     << "retry requires fresh intent after it returns";
+            } else {
+                qCWarning(lcProtocol)
+                    << "RadioModel: TX refused — coordinator stop is unacknowledged;"
+                    << "admission stays closed until the session ends";
+            }
         }
         emitInterlockNotification(message, key);
         return false;
@@ -91,6 +122,7 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
     }
     m_localTxIntents.insert(activity, intent);
     m_txOperationActivities |= static_cast<unsigned>(activity);
+    m_backend->setTransmitContext(captureTxMedia(m_backendTxProducer));
     return true;
 }
 
@@ -119,9 +151,24 @@ void RadioModel::completeLocalTxIfDrained()
     }
 }
 
+void RadioModel::acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation)
+{
+    // The lifecycle caller has already established transport teardown. An
+    // entered writer can still be returning through a reentrant disconnect;
+    // retry that bookkeeping only. This timer never supplies radio-stop proof.
+    if (!operation.sameOperation(m_txOperation)
+        || m_txCoordinator.acknowledgeStopped(operation)
+        || !m_txCoordinator.recovering() || !m_txCoordinator.hasInFlightDispatches()) {
+        return;
+    }
+    QTimer::singleShot(10, this, [this, operation] {
+        acknowledgeTxTransportTeardown(operation);
+    });
+}
+
 std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation& operation)
 {
-    const bool tracked = operation.permitsCleanup();
+    const bool tracked = operation.sameOperation(m_txOperation) && operation.permitsCleanup();
     if (tracked) {
         ++m_pendingTxDeliveries;
     }
@@ -135,22 +182,37 @@ std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation
     };
 }
 
-void RadioModel::sendTxKeyingCommand(const QString& command, bool keying)
+TxCoordinator::Completion RadioModel::trackTxQueue(const TxCoordinator::Operation& operation)
 {
-    const TxCoordinator::Operation operation = m_txOperation;
-    if (keying) {
-        (void)sendTxTcpCommand(command, operation, true, {});
+    const QPointer<RadioModel> receiver(this);
+    const auto consumed = trackTxDelivery(operation);
+    return TxCoordinator::Completion([receiver, consumed] {
+        if (receiver) {
+            if (QThread::currentThread() == receiver->thread()) {
+                consumed();
+            } else {
+                QMetaObject::invokeMethod(receiver, consumed, Qt::QueuedConnection);
+            }
+        }
+    });
+}
+
+void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence)
+{
+    const TxCoordinator::Operation operation = fence.operation;
+    const auto completed = [completion = fence.completion] { completion.finish(); };
+    if (fence.keying) {
+        if (!sendTxTcpCommand(command, operation, true, completed)) {
+            completed();
+        }
         return;
     }
     // Retain a short, normally released operation until its queued key-up is
     // consumed, just as NetCW does. Otherwise completion cancels an earlier
     // key-on before the transport has had a chance to consume either edge.
     // This is local queue completion, not qualified radio-idle evidence.
-    const TxCoordinator::Operation cleanup = operation.permitsCleanup()
-        ? operation : m_txCoordinator.cleanupFence();
-    const auto consumed = trackTxDelivery(operation);
-    if (!sendTxTcpCommand(command, cleanup, false, consumed)) {
-        consumed();
+    if (!sendTxTcpCommand(command, operation, false, completed)) {
+        completed();
     }
 }
 

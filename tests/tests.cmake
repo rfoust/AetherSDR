@@ -652,9 +652,11 @@ add_test(NAME icom_memory_test COMMAND icom_memory_test)
 
 add_executable(icom_civ_scheduler_test
     tests/icom_civ_scheduler_test.cpp
+    src/core/TxCoordinator.cpp
     src/core/backends/icom/IcomCivScheduler.cpp
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
+target_link_libraries(icom_civ_scheduler_test PRIVATE Qt6::Core)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
 
 # Socket-free PR #5436 coverage recovered from the retired capability fixture.
@@ -780,6 +782,7 @@ add_test(NAME icom_backend_test COMMAND icom_backend_test)
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
     tests/icom_live_probe.cpp
+    src/core/TxCoordinator.cpp
     src/core/backends/icom/IcomSession.cpp
     src/core/backends/icom/IcomStream.cpp
     src/core/backends/icom/IcomProtocol.cpp
@@ -2030,6 +2033,7 @@ add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)
 add_executable(opus_tx_pacer_test
     tests/opus_tx_pacer_test.cpp
     src/core/OpusTxPacer.cpp
+    src/core/TxCoordinator.cpp
 )
 target_include_directories(opus_tx_pacer_test PRIVATE src)
 target_link_libraries(opus_tx_pacer_test PRIVATE Qt6::Core)
@@ -4161,6 +4165,12 @@ target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
 
+# Socket-free: inject PCM into AudioEngine, collect its output signals only.
+add_executable(tx_audio_context_test tests/tx_audio_context_test.cpp)
+target_include_directories(tx_audio_context_test PRIVATE src)
+target_link_libraries(tx_audio_context_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_audio_context_test COMMAND tx_audio_context_test)
+
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
     src/models/TransmitModel.cpp
@@ -4991,6 +5001,7 @@ set(AETHER_SETTINGS_CONSUMERS
     atu_seam_gate_test
     backend_capability_revision_test
     tx_operation_integration_test
+    tx_audio_context_test
     backend_slice_lifecycle_test
     client_display_settings_test
     gui_nested_lifetime_test

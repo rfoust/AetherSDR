@@ -835,8 +835,8 @@ void RadioModel::setupBackend(const QString& family)
         }
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
             flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
-            flex->setTxCommandSink([this](const QString& cmd, bool keying) {
-                sendTxKeyingCommand(cmd, keying);
+            flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
+                sendTxKeyingCommand(cmd, fence);
             });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
             // moving slice encode behind the seam keeps TX safety above it.
@@ -1878,7 +1878,7 @@ void RadioModel::teardownBackend()
     // reaches that path — see hasWsprTxStream().
     m_wsprTxSeamAudioArmed = false;
     m_backend.reset();
-    (void)m_txCoordinator.acknowledgeStopped(m_txOperation);
+    acknowledgeTxTransportTeardown(m_txOperation);
     m_connection = nullptr;
     m_panStream = nullptr;
     // Backend pan ids are only meaningful to the backend that issued them, so
@@ -2307,7 +2307,7 @@ RadioModel::RadioModel(QObject* parent)
             applyTuneInhibit();
         }
         if (m_backend && (!start || operation.permitsDispatch(txMonotonicMs()))) {
-            m_backend->setAtu(start);
+            m_backend->setAtu(start, start ? operation : m_txCoordinator.cleanupFence(), trackTxQueue(operation));
         }
         if (!start) {
             endLocalTxActivity(intent);
@@ -2336,7 +2336,8 @@ RadioModel::RadioModel(QObject* parent)
             applyTuneInhibit();
         }
         if (m_backend && (!on || operation.permitsDispatch(txMonotonicMs()))) {
-            m_backend->setTune(on, m_transmitModel.tunePower());
+            m_backend->setTune(on, m_transmitModel.tunePower(),
+                               on ? operation : m_txCoordinator.cleanupFence(), trackTxQueue(operation));
             if (commandEpoch == m_tuneCommandEpoch) {
                 publishCommandedBackendTransmitEdge(on);
             }
@@ -2561,7 +2562,7 @@ RadioModel::RadioModel(QObject* parent)
             return false;
         }
         Q_UNUSED(wpm);
-        const QString rejection = m_backend->sendCwText(text);
+        const QString rejection = m_backend->sendCwText(text, m_txOperation, trackTxQueue(m_txOperation));
         if (!rejection.isEmpty()) {
             emit radioMessageReceived(
                 tr("CW text not sent: %1").arg(rejection),
@@ -2576,7 +2577,7 @@ RadioModel::RadioModel(QObject* parent)
         m_cwxDrainArmed = false;
         if (m_backend && !usesFlexCommandPlane()
             && backendCapabilities().hasRadioSideCwKeyer) {
-            m_backend->abortCwText();
+            m_backend->abortCwText(m_txCoordinator.cleanupFence(), trackTxQueue(m_txOperation));
         }
         endLocalTxActivity(intent);
     });
@@ -2756,13 +2757,13 @@ RadioModel::~RadioModel()
     m_cwxModel.blockSignals(true);
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
-            m_backend->setTune(false, m_transmitModel.tunePower());
+            m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
         }
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Atu)) {
-            m_backend->setAtu(false);
+            m_backend->setAtu(false, m_txCoordinator.cleanupFence());
         }
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Cwx)) {
-            m_backend->abortCwText();
+            m_backend->abortCwText(m_txCoordinator.cleanupFence());
         }
     }
     // Disconnect RadioModel's own connections to the wire objects BEFORE they
@@ -4622,7 +4623,8 @@ bool RadioModel::forwardNonFlexCwKeying(bool down)
     }
     emit backendCwKeyingForwarded(down);
     m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
-                           m_transmitModel.cwDelay());
+                           m_transmitModel.cwDelay(),
+                           down ? m_txOperation : m_txCoordinator.cleanupFence(), trackTxQueue(m_txOperation));
     return true;
 }
 
@@ -4721,7 +4723,7 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
         return;
     }
     if (m_backend)
-        m_backend->setKeying(tx);
+        m_backend->setKeying(tx, tx ? operation : cleanup, trackTxQueue(operation));
 
     if (commandEpoch == m_txCommandEpoch) {
         publishCommandedBackendTransmitEdge(tx);
@@ -5009,7 +5011,7 @@ void RadioModel::sendCwPtt(bool on, const QString& debugSource,
     }
     bool deferred = false;
     if (m_backend && !usesFlexCommandPlane()) {
-        m_backend->setKeying(on);
+        m_backend->setKeying(on, on ? m_txOperation : m_txCoordinator.cleanupFence(), trackTxQueue(m_txOperation));
     } else {
         deferred = sendNetCwCommand(on ? QStringLiteral("cw ptt 1") : QStringLiteral("cw ptt 0"),
                          debugSource, debugTraceId, debugSourceMs, {}, [this, on, intent] {
@@ -5299,11 +5301,14 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
             return;
         }
         QMetaObject::invokeMethod(stream, [stream, operation, keying, packet, copy, delay, logUdpSend, receiver, partDelivered] {
-            if (!stream || (keying ? !operation.permitsDispatch(txMonotonicMs()) : !operation.permitsCleanup())) {
-                return;
+            {
+                const TxCoordinator::Dispatch dispatch = operation.beginDispatch(txMonotonicMs(), keying);
+                if (!stream || !dispatch) {
+                    return;
+                }
+                logUdpSend(copy, delay, packet.size());
+                stream->sendToRadio(packet);
             }
-            logUdpSend(copy, delay, packet.size());
-            stream->sendToRadio(packet);
             // Normal key-up is not cancellation. Keep its operation alive
             // until queued key-downs and the final key-up copy have reached
             // this worker; otherwise a short element can lose its down edge.
@@ -5337,9 +5342,15 @@ bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::O
         // WAN's TLS writer is synchronous on the model's thread, unlike LAN.
         // Capture its identity and check authority immediately at that writer.
         const QPointer<WanConnection> connection = m_wanConn;
-        if (connection && permitted()) {
-            connection->sendCommand(command, std::move(reply));
-        } else if (reply) {
+        bool dispatched = false;
+        {
+            const TxCoordinator::Dispatch dispatch = operation.beginDispatch(txMonotonicMs(), keying);
+            dispatched = connection && dispatch && permitted();
+            if (dispatched) {
+                connection->sendCommand(command, std::move(reply));
+            }
+        }
+        if (!dispatched && reply) {
             reply(kNoCommandPlaneCode, QStringLiteral("TX command cancelled before dispatch"));
         }
         if (receiver && delivered) {
@@ -5358,10 +5369,14 @@ bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::O
     if (reply) {
         m_pendingCallbacks.insert(seq, std::move(reply));
     }
-    QMetaObject::invokeMethod(connection, [connection, receiver, seq, command, permitted, delivered] {
-        const bool dispatched = connection && permitted();
-        if (dispatched) {
-            connection->writeCommand(seq, command);
+    QMetaObject::invokeMethod(connection, [connection, receiver, seq, command, permitted, delivered, operation, keying] {
+        bool dispatched = false;
+        {
+            const TxCoordinator::Dispatch dispatch = operation.beginDispatch(txMonotonicMs(), keying);
+            dispatched = connection && dispatch && permitted();
+            if (dispatched) {
+                connection->writeCommand(seq, command);
+            }
         }
         if (receiver) {
             QMetaObject::invokeMethod(receiver, [receiver, seq, dispatched, delivered] {
@@ -7623,7 +7638,7 @@ void RadioModel::restoreTuneInhibit()
 void RadioModel::onDisconnected()
 {
     resetTxOperations();
-    (void)m_txCoordinator.acknowledgeStopped(m_txOperation);
+    acknowledgeTxTransportTeardown(m_txOperation);
     qCDebug(lcProtocol) << "RadioModel: disconnected";
     m_guiClientRegistrationState.reset();
 
@@ -9061,15 +9076,21 @@ void RadioModel::setTxAudioMonitor(bool on)
 }
 
 void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               bool clientLeveled)
+                               bool clientLeveled, const TxCoordinator::Context& context)
 {
-    if (m_backend)
-        m_backend->submitTxAudio(int16Stereo, sampleRateHz, clientLeveled);
+    const TxCoordinator::Dispatch dispatch = context.beginDispatch(txMonotonicMs());
+    if (dispatch && m_backend) {
+        m_backend->submitTxAudio(int16Stereo, sampleRateHz, clientLeveled, context);
+    }
 }
 
-void RadioModel::finishTxAudio(quint64 token)
+void RadioModel::finishTxAudio(quint64 token, const TxCoordinator::Context& context)
 {
-    const int drainMs = m_backend ? std::max(0, m_backend->finishTxAudio()) : 0;
+    const TxCoordinator::Dispatch dispatch = context.beginDispatch(txMonotonicMs());
+    if (!dispatch) {
+        return;
+    }
+    const int drainMs = m_backend ? std::max(0, m_backend->finishTxAudio(context)) : 0;
     emit txAudioFinished(token, drainMs);
 }
 

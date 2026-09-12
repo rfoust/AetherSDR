@@ -529,7 +529,8 @@ void MainWindow::activateRADE(int sliceId)
     // tx=true: new over starting — clear pending flag and reset engine EOO state.
     // tx=false + !pending + isTransmitting: unintercepted unkey — request EOO as
     //   best-effort (radio may already be in RX, but at least the app won't hang).
-    const auto beginOver = [this] {
+    const TxCoordinator::Producer radeProducer = m_radioModel.registerTxProducer(m_radeEngine);
+    const auto beginOver = [this, radeProducer] {
         if (!m_radeEngine || !m_radeEngine->isActive()
             || (m_radeTxActive && !m_radeEooPending)) {
             return;
@@ -541,8 +542,14 @@ void MainWindow::activateRADE(int sliceId)
         m_radeEooPending = false;
         m_radeTxActive = true;
         syncKiwiSdrTransmitMute();
-        QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine]() {
-            engine->resetTx();
+        const TxCoordinator::Context context = m_radioModel.captureTxMedia(radeProducer);
+        QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, context]() {
+            if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
+                engine->resetTx(context);
+            }
+        }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, context] {
+            audio->setRawMicrophoneContext(context);
         }, Qt::QueuedConnection);
         qCDebug(lcRade) << "MainWindow: MOX asserted — RADE TX state reset for new over";
     };
@@ -1237,11 +1244,19 @@ bool MainWindow::startDax()
 
     // Wire DAX TX: apps → bridge → AudioEngine → VITA-49.
     // AudioEngine chooses packet format/routing based on DaxTxLowLatency.
+    // This is one configured shared endpoint, not an inferred process identity.
+    const TxCoordinator::Producer daxProducer = m_radioModel.registerTxProducer(m_daxBridge);
+    connect(&m_radioModel, &RadioModel::localTransmitEngaged, m_daxBridge,
+            [this, bridge = m_daxBridge, daxProducer] {
+        bridge->setTxContext(m_radioModel.captureTxMedia(daxProducer));
+    });
     connect(m_daxBridge, &DaxBridge::txAudioReady,
-            this, [this](const QByteArray& pcm) {
+            this, [this](const QByteArray& pcm, const TxCoordinator::Context& context) {
         if (m_audio->isRadeMode()) return;
         if (!m_audio->isDaxTxMode()) return;
-        QMetaObject::invokeMethod(m_audio, [this, pcm]() { m_audio->feedDaxTxAudio(pcm); });
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, pcm, context] {
+            audio->feedDaxTxAudio(pcm, context);
+        });
     });
 
     // Save current mic selection before forcing PC audio source.
