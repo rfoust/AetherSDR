@@ -53,6 +53,13 @@ struct IcomCivBackendTestAccess {
     // right — is the unkey INTENT and the address it was sent to.
     static bool unkeyIntended(const IcomCivBackend& b)
     { return b.m_pendingPttIntent && !*b.m_pendingPttIntent; }
+    static void dispatchReady(IcomCivBackend& b)
+    {
+        // A command's enqueue time can cross the millisecond sampled by its
+        // immediate pump. Advance the existing socket-free dispatch seam,
+        // without assuming the whole identity callback fits in one tick.
+        b.pumpCiv(b.nowMs());
+    }
     static void advertise(IcomCivBackend& b, std::uint8_t address)
     { b.m_session->m_advertisedCivAddress = address; }
     static void enableWake(IcomCivBackend& b, uint modelId)
@@ -218,6 +225,7 @@ int main(int argc, char** argv)
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     IcomCivBackendTestAccess::markKeyed(backend);
     IcomCivBackendTestAccess::inject(backend, "fefee0511900a4fd");
+    IcomCivBackendTestAccess::dispatchReady(backend);
     // The unkey must LEAVE, and it must leave for the destination this session
     // already selected — not the conflicting responder that just arrived.
     // m_keyed itself stays radio-authoritative until the 1C 00 readback (#5311).
