@@ -4,6 +4,10 @@ This is the first Stage 4 increment of RFC #3849, after the receive-control
 milestone (#5563). It does **not** enable daemon transmission or complete the
 RFC's multi-client TX arbiter.
 
+The command-queue follow-up extends that foundation, not its authority:
+primary Flex commands and CWX text now carry cancellation to the terminal
+TCP writer. The desktop compatibility actor remains shared.
+
 ## Authority and ownership
 
 `TxCoordinator` lives in `libaethercore`. Trusted engine composition registers
@@ -110,6 +114,35 @@ the model; reset/reconnect and the scheduled-time floor reject old-session edges
 before either Flex or non-Flex delivery. This is session isolation, not yet
 per-producer authorization within a shared desktop operation.
 
+### Primary Flex and CWX command queues
+
+Flex `setKeying`, `setTune`, `setAtu` and `abortCwText` use a dedicated TX
+command sink, with no fallback to the generic command sink. Encoding remains
+behind the backend seam; the sink's keying/cleanup flag is a classification,
+not authority. RadioModel captures its original operation and transport and
+checks them at the LAN writer or synchronous WAN dispatch.
+
+Normal primary key-up retains local operation lifetime until the TCP queue
+consumes it. This preserves both edges of a short key-down/key-up sequence;
+disconnect cancels key-down immediately instead. Idle cleanup cannot unkey a
+subsequently acquired operation, and a late queue callback cannot finish a
+newer operation or a reengaged local intent. Queue consumption includes a
+cancelled write and is **not** transport delivery, a command acknowledgement,
+radio readback, or a multi-client handoff permission.
+
+CWX text/macro commands additionally capture a worker-safe batch cancellation
+fence. Clear/reset invalidates that fence immediately even while a separately
+held MOX keeps the compatibility operation alive. Cancelled queued commands
+retire their pending reply callbacks. Worker checks never read CwxModel state
+or dereference the model's synchronous admission closure.
+
+An unsynced macro retains its operation until queued local handoff completes.
+Appending one to known text abandons the now-incomplete drain index without
+cancelling either the text or macro waiting for transport. Clear/reset still
+cancels both. Partial `cwx erase` keeps its existing, unqualified semantics;
+this increment does not resolve the hardware-dependent drain-index question
+documented in `CwxModel::erase`.
+
 Disconnect, forced disconnect and backend replacement cancel before transport
 reuse. Session admission closes before any cancellation, pending-command reply
 or model-removal notification, even when no operation was active. It stays
@@ -133,11 +166,17 @@ is changed. The bridge's existing permission gate and watchdog remain intact.
 
 Desktop compatibility completion ends a local intent, **not** a qualified
 radio-idle claim. It must not be reused to authorize another client's TX.
-The next increment must propagate per-client actors through all integration
+The remaining work must propagate per-client actors through all integration
 and audio producers, bind bounded actor expiry to engine scheduling, complete
 qualified stop/readback recovery and fence remaining queued audio/wire paths.
 Only after that coverage is demonstrated can daemon TX grants be considered.
 The separately tracked CW/TUNE UX interlock in #5513 is not replaced here.
+
+Cross-tracker sequencing does not block this Stage 4 work (#3849's
+cross-tracker prerequisites comment, 2026-09-11). Capability serialization
+must not widen before #5594/M1 and the capability-record convention are ready.
+The Flex RX PCM conversion belongs to #5468/#5598; this TX-command increment
+does not perform that conversion or begin Stage 5 streaming.
 
 ## Verification boundary
 
@@ -147,7 +186,11 @@ stale handles, thread affinity, reentrancy and cleanup-only authority.
 injected backend and terminal packet writer. It does not start a radio peer,
 bind a socket, discover hardware or transmit RF. It covers typed dispatch,
 refusals, deferred release, replacement, reentrant intent, Quindar, CWX and
-queued NetCW delivery. Existing model, ATU, Icom, CAT/TUNE, applet and bridge
+queued NetCW, primary Flex and CWX delivery. The additional cases cover short
+MOX/TUNE/ATU edges, reset-before-write, idle cleanup, reengagement, CWX
+clear-and-replace while MOX is held, producer destruction, cancelled reply
+retirement, and preservation of unknown-length macro tails. Existing model,
+ATU, Icom, CAT/TUNE, applet and bridge
 watchdog tests remain part of the targeted regression set.
 The private test-only terminal writers in `PanadapterStream` and
 `RadioConnection` allow these queue tests to exercise production dispatch without

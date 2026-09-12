@@ -542,6 +542,16 @@ remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
 
+Step 4 has an engine-owned `TxCoordinator` and a transitional desktop actor;
+this is not yet per-client TX authorization. Flex primary keying and CWX text
+carry operation/batch fences to the original TCP writer. A queue-consumed
+callback ends local handoff only, never proves radio idle. Preserve normal
+short key-down/key-up sequences, Quindar/RADE release tails, and held MOX when
+cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
+until the remaining producer/audio fences and qualified stop/recovery contract
+are complete. See `docs/aetherd-stage4-tx-coordinator.md`. This work does not
+widen `welcome`/capability serialization or replace #5598's RX PCM seam work.
+
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
 `AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`

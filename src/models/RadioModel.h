@@ -1754,6 +1754,7 @@ private:
     TxCoordinator::Operation m_txOperation;
     enum class TxActivity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
     unsigned m_txActivities{0};
+    unsigned m_pendingTxDeliveries{0};
     bool m_txSessionClosing{false};
     quint64 m_txCommandEpoch{0};
     quint64 m_tuneCommandEpoch{0};
@@ -1765,11 +1766,16 @@ private:
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
     void endLocalTxActivity(TxActivity activity);
+    void completeLocalTxIfDrained();
+    std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
+    void sendTxKeyingCommand(const QString& command, bool keying);
+    void sendCwxCommand(const QString& command, bool keying, ResponseCallback reply = {});
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
     void applyBackendTransmitDelta(const TransmitDelta& delta);
-    bool sendNetCwTcp(const QString& command, const TxCoordinator::Operation& operation,
-                     bool keying, std::function<void()> delivered);
+    bool sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
+                          bool keying, std::function<void()> delivered,
+                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {});
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;

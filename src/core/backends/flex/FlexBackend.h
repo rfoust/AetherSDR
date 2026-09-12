@@ -44,6 +44,10 @@ public:
     // Where the core verbs emit their SmartSDR command strings — RadioModel's
     // existing sendCommand() funnel, so verbs reuse the one wire-write path.
     void setCommandSink(std::function<void(const QString&)> sink);
+    // Primary keying verbs use an operation-fenced writer, never the generic
+    // command sink. The bool distinguishes key-on from cleanup, not authority.
+    // Trusted engine composition supplies the original operation at dispatch.
+    void setTxCommandSink(std::function<void(const QString&, bool)> sink);
     // Slice verbs (setSliceFrequency/Mode/Filter) route through THIS sink, which
     // RadioModel wires to its TX-inhibit-guarded sendSliceCommand — so keeping
     // the encode's TX safety above the seam (RFC §6). Falls back to the generic
@@ -174,6 +178,7 @@ public:
 
 private:
     void send(const QString& cmd);
+    void sendTx(const QString& cmd, bool keying);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)
 
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
@@ -181,6 +186,7 @@ private:
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<void(const QString&)> m_sink;
+    std::function<void(const QString&, bool)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
 

@@ -8,11 +8,13 @@
 #include "core/PanadapterStream.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QEventLoop>
 #include <QTimer>
 #include <cstdio>
 #include <memory>
 #include <limits>
+#include <vector>
 
 using namespace AetherSDR;
 
@@ -25,6 +27,13 @@ public:
     }
     static bool cwxDrainArmed(const RadioModel& radio) { return radio.m_cwxDrainArmed; }
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
+    static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
+    static void bindTxEncoder(RadioModel& radio, FlexBackend& encoder)
+    {
+        encoder.setTxCommandSink([&radio](const QString& command, bool keying) {
+            radio.sendTxKeyingCommand(command, keying);
+        });
+    }
     static void injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands)
     {
         connection.m_commandSinkForTest = [&commands](quint32, const QString& command) { commands << command; };
@@ -62,6 +71,9 @@ public:
     RadioCapabilities caps;
     bool connected{false};
     QString cwRejection;
+    std::function<void(bool)> keyingWriter;
+    std::function<void(bool)> tuneWriter;
+    std::function<void(bool)> atuWriter;
     QStringList* commands;
     explicit RecordingBackend(QStringList& record) : commands(&record)
     {
@@ -78,9 +90,27 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool on) override { *commands << (on ? "mox:on" : "mox:off"); }
-    void setTune(bool on, int) override { *commands << (on ? "tune:on" : "tune:off"); }
-    void setAtu(bool on) override { *commands << (on ? "atu:on" : "atu:off"); }
+    void setKeying(bool on) override
+    {
+        *commands << (on ? "mox:on" : "mox:off");
+        if (keyingWriter) {
+            keyingWriter(on);
+        }
+    }
+    void setTune(bool on, int) override
+    {
+        *commands << (on ? "tune:on" : "tune:off");
+        if (tuneWriter) {
+            tuneWriter(on);
+        }
+    }
+    void setAtu(bool on) override
+    {
+        *commands << (on ? "atu:on" : "atu:off");
+        if (atuWriter) {
+            atuWriter(on);
+        }
+    }
     void setCwKeying(bool on, bool, int) override { *commands << (on ? "cw:on" : "cw:off"); }
     QString sendCwText(const QString& text) override { *commands << "cwx:" + text; return cwRejection; }
     void abortCwText() override { *commands << "cwx:abort"; }
@@ -216,13 +246,93 @@ void flexEncoding()
     FlexBackend backend;
     backend.setCommandSink([&](const QString& command) { commands << command; });
     backend.setKeying(true);
+    backend.setTune(true, 10);
+    backend.setAtu(true);
+    check(commands.isEmpty(), "primary Flex keying never falls back to an unfenced generic sink");
+    std::vector<bool> keying;
+    backend.setTxCommandSink([&](const QString& command, bool on) {
+        commands << command;
+        keying.push_back(on);
+    });
+    backend.setKeying(true);
     backend.setKeying(false);
     backend.setTune(true, 10);
     backend.setTune(false, 10);
     backend.setAtu(true);
     backend.setAtu(false);
-    check(commands == QStringList({"xmit 1", "xmit 0", "transmit tune 1", "transmit tune 0", "atu start", "atu bypass"}),
+    backend.abortCwText();
+    check(commands == QStringList({"xmit 1", "xmit 0", "transmit tune 1", "transmit tune 0", "atu start", "atu bypass", "cwx clear"}),
           "Flex seam preserves exact FlexLib 4.2.18 keying command forms");
+    check(keying == std::vector<bool>({true, false, true, false, true, false, false}),
+          "Flex encoder distinguishes keying from cleanup without claiming authority");
+}
+
+void queuedPrimaryKeying()
+{
+    for (int testCase = 0; testCase != 12; ++testCase) {
+        const int kind = testCase / 4; // MOX, TUNE, ATU
+        const int scenario = testCase % 4;
+        // The terminal connection is inert: no init, connect or socket bind.
+        // Flex encodes the commands; the existing injected backend supplies
+        // the model's admission prerequisites without synthetic firmware.
+        QStringList wire;
+        RadioConnection connection;
+        FlexBackend encoder;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, wire);
+        TxOperationIntegrationTestAccess::bindTxEncoder(f.radio, encoder);
+        f.backend->keyingWriter = [&encoder](bool on) { encoder.setKeying(on); };
+        f.backend->tuneWriter = [&encoder](bool on) { encoder.setTune(on, 10); };
+        f.backend->atuWriter = [&encoder](bool on) { encoder.setAtu(on); };
+        const auto setKeying = [&](bool on) {
+            if (kind == 0) {
+                f.radio.setTransmit(on);
+            } else if (kind == 1) {
+                if (on) {
+                    f.radio.transmitModel().startTune();
+                } else {
+                    f.radio.transmitModel().stopTune();
+                }
+            } else if (on) {
+                f.radio.transmitModel().atuStart();
+            } else {
+                f.radio.transmitModel().atuBypass();
+            }
+        };
+        const QString on = kind == 0 ? "xmit 1" : kind == 1 ? "transmit tune 1" : "atu start";
+        const QString off = kind == 0 ? "xmit 0" : kind == 1 ? "transmit tune 0" : "atu bypass";
+        if (scenario == 3) {
+            setKeying(false); // old idle cleanup must not unkey a new owner
+        }
+        setKeying(true);
+        const TxCoordinator::Operation operation = f.radio.transmitOperation();
+        if (scenario == 0 || scenario == 2) {
+            setKeying(false);
+        }
+        if (scenario == 1) {
+            f.radio.forceDisconnect();
+        } else if (scenario == 2) {
+            setKeying(true);
+        }
+        QEventLoop loop;
+        QTimer::singleShot(0, &loop, &QEventLoop::quit);
+        loop.exec();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        if (scenario == 0) {
+            check(wire == QStringList({on, off}),
+                  "short normal primary TX preserves both queued edges");
+            check(!operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+                  "normal completion follows the terminal cleanup queue barrier");
+        } else if (scenario == 1) {
+            check(!wire.contains(on), "reset cancels queued primary TX before the terminal writer");
+        } else if (scenario == 2) {
+            check(wire == QStringList({on, off, on})
+                      && f.radio.transmitOperation().permitsDispatch(std::numeric_limits<qint64>::max()),
+                  "old cleanup completion cannot finish a reengaged local TX intent");
+        } else {
+            check(wire == QStringList({on}), "idle cleanup cannot unkey the newly acquired operation");
+        }
+    }
 }
 
 void teardownAdmission()
@@ -391,6 +501,49 @@ void cwxCancellationFence()
                      [&](const QString&, int) { ++sends; });
     cwx.send("CQ +TEST DE CALL");
     check(cleared && sends == 0, "CWX cancellation fences remaining segments and local keyer delivery");
+    const auto oldBatch = cwx.queuedTransmissionPermit();
+    cwx.resetDrainWatch();
+    check(!oldBatch() && cwx.queuedTransmissionPermit()(),
+          "CWX reset invalidates worker-safe old batch permits only");
+    CwxModel::TransmissionPermit destroyed;
+    {
+        CwxModel temporary;
+        destroyed = temporary.queuedTransmissionPermit();
+    }
+    check(!destroyed(), "a queued CWX permit cannot outlive its producer");
+}
+
+void queuedCwxCancellation()
+{
+    for (int scenario = 0; scenario != 3; ++scenario) {
+        QStringList tcp;
+        RadioConnection connection;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+        f.radio.setTransmit(true);
+        const TxCoordinator::Operation heldMox = f.radio.transmitOperation();
+        f.radio.cwxModel().send("OLD +BATCH");
+        if (scenario == 0) {
+            f.radio.cwxModel().clearBuffer();
+        } else if (scenario == 1) {
+            f.radio.cwxModel().clearBuffer();
+            f.radio.cwxModel().send("NEW");
+        } else {
+            f.radio.forceDisconnect();
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(tcp.filter("cwx send").size() == (scenario == 1 ? 1 : 0)
+                  && (scenario != 1 || tcp.filter("cwx send").first().contains("NEW")),
+              "clear/reset cancels queued CWX segments without borrowing a held MOX permit");
+        check(TxOperationIntegrationTestAccess::pendingReplies(f.radio) == (scenario == 1 ? 1 : 0),
+              "cancelled queued CWX retires its reply callback, leaving only replacement work");
+        if (scenario != 2) {
+            check(heldMox.sameOperation(f.radio.transmitOperation())
+                      && heldMox.permitsDispatch(std::numeric_limits<qint64>::max()),
+                  "CWX cancellation does not release the separately held MOX intent");
+        }
+    }
 }
 
 void cwxCompletionAndRefusal()
@@ -482,21 +635,30 @@ void flexCwxLifecycle()
     Fixture f;
     TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
     f.radio.cwxModel().sendMacro(1);
+    check(f.radio.transmitOperation().permitsDispatch(std::numeric_limits<qint64>::max()),
+          "unsynced Flex macro retains authority until terminal dispatch");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     check(!f.radio.transmitOperation().permitsDispatch(std::numeric_limits<qint64>::max()),
           "unsynced Flex macro closes local handoff without claiming a drain observation");
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     check(tcp.contains("cwx macro send 1"), "unsynced macro preserves radio-side expansion");
 
     f.radio.cwxModel().send("CQ");
     const TxCoordinator::Operation operation = f.radio.transmitOperation();
     const int epoch = f.radio.cwxModel().drainEpoch();
+    const auto queuedBatch = f.radio.cwxModel().queuedTransmissionPermit();
     check(TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
               && operation.permitsDispatch(std::numeric_limits<qint64>::max()),
           "known Flex text keeps its operation until drain or failure");
     f.radio.cwxModel().handleSendReply(1, {}, epoch, 2);
     check(!TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
-              && !operation.permitsDispatch(std::numeric_limits<qint64>::max()),
-          "Flex reply failure disarms drain and releases the exact local activity");
+              && !queuedBatch(),
+          "Flex reply failure immediately disarms drain and fences the exact queued batch");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(!operation.permitsDispatch(std::numeric_limits<qint64>::max())
+              && tcp.contains("cwx clear") && tcp.filter("cwx send").isEmpty(),
+          "failed Flex batch completes after queued cleanup without writing cancelled text");
     f.radio.cwxModel().send("NEW");
     const TxCoordinator::Operation replacement = f.radio.transmitOperation();
     f.radio.cwxModel().handleSendReply(1, {}, epoch, 2);
@@ -508,6 +670,12 @@ void flexCwxLifecycle()
     check(!TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
               && f.radio.cwxModel().cwxEndIndex() == -1,
           "unknown-length macro tail cannot be truncated by an earlier batch's drain index");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(tcp.filter("cwx send").size() == 1
+              && tcp.filter("cwx send").first().contains("NEW")
+              && tcp.contains("cwx macro send 2"),
+          "abandoning an unknown-length drain watch preserves queued text and macro tail");
 }
 
 void queuedNetCwEdges()
@@ -635,11 +803,13 @@ int main(int argc, char** argv)
     refusedStartsAndUnconditionalStops();
     delayedReleaseAndReplacement();
     flexEncoding();
+    queuedPrimaryKeying();
     teardownAdmission();
     disconnectAdmission();
     reentrantIntents();
     quindarNormalRelease();
     cwxCancellationFence();
+    queuedCwxCancellation();
     cwxCompletionAndRefusal();
     cwxFailureAndSpeedRestore();
     flexCwxLifecycle();

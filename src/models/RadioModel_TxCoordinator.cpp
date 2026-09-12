@@ -76,6 +76,9 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
         emitInterlockNotification(message, key);
         return false;
     }
+    if (!m_txOperation.sameOperation(admission.operation)) {
+        m_pendingTxDeliveries = 0;
+    }
     m_txOperation = admission.operation;
     m_txActivities |= static_cast<unsigned>(activity);
     return true;
@@ -84,12 +87,66 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
 void RadioModel::endLocalTxActivity(TxActivity activity)
 {
     m_txActivities &= ~static_cast<unsigned>(activity);
-    if (m_txActivities == 0) {
+    completeLocalTxIfDrained();
+}
+
+void RadioModel::completeLocalTxIfDrained()
+{
+    if (m_txActivities == 0 && m_pendingTxDeliveries == 0) {
         // Existing desktop sequencers explicitly end their local intent. This
         // fences pending work; it is NOT a claim that the radio is observed RX.
         // Do not use this compatibility completion to authorize another
         // client's TX. Per-client admission/readback is the next Stage 4 step.
         (void)m_txCoordinator.complete(m_txOperation);
+    }
+}
+
+std::function<void()> RadioModel::trackTxDelivery(const TxCoordinator::Operation& operation)
+{
+    const bool tracked = operation.permitsCleanup();
+    if (tracked) {
+        ++m_pendingTxDeliveries;
+    }
+    return [this, operation, tracked] {
+        if (!tracked || !m_txOperation.sameOperation(operation)
+            || m_pendingTxDeliveries == 0) {
+            return;
+        }
+        --m_pendingTxDeliveries;
+        completeLocalTxIfDrained();
+    };
+}
+
+void RadioModel::sendTxKeyingCommand(const QString& command, bool keying)
+{
+    const TxCoordinator::Operation operation = m_txOperation;
+    if (keying) {
+        (void)sendTxTcpCommand(command, operation, true, {});
+        return;
+    }
+    // Retain a short, normally released operation until its queued key-up is
+    // consumed, just as NetCW does. Otherwise completion cancels an earlier
+    // key-on before the transport has had a chance to consume either edge.
+    // This is local queue completion, not qualified radio-idle evidence.
+    const TxCoordinator::Operation cleanup = operation.permitsCleanup()
+        ? operation : m_txCoordinator.cleanupFence();
+    const auto consumed = trackTxDelivery(operation);
+    if (!sendTxTcpCommand(command, cleanup, false, consumed)) {
+        consumed();
+    }
+}
+
+void RadioModel::sendCwxCommand(const QString& command, bool keying, ResponseCallback reply)
+{
+    const TxCoordinator::Operation operation = m_txOperation;
+    const TxCoordinator::Operation fence = keying || operation.permitsCleanup()
+        ? operation : m_txCoordinator.cleanupFence();
+    const auto consumed = trackTxDelivery(operation);
+    // An ESC must cancel queued text even while a separate MOX intent keeps
+    // the shared desktop operation alive. Never read CwxModel on the worker.
+    const auto batch = m_cwxModel.queuedTransmissionPermit();
+    if (!sendTxTcpCommand(command, fence, keying, consumed, std::move(reply), batch)) {
+        consumed();
     }
 }
 
@@ -131,6 +188,7 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    m_pendingTxDeliveries = 0;
     m_cwInputSession.fetch_add(1, std::memory_order_release);
     m_cwInputNotBefore = std::chrono::steady_clock::now();
     m_transmitModel.cancelPttRelease();

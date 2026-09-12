@@ -118,6 +118,11 @@ void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
     m_sink = std::move(sink);
 }
 
+void FlexBackend::setTxCommandSink(std::function<void(const QString&, bool)> sink)
+{
+    m_txSink = std::move(sink);
+}
+
 void FlexBackend::setSliceCommandSink(std::function<void(const QString&)> sink)
 {
     m_sliceSink = std::move(sink);
@@ -459,11 +464,20 @@ void FlexBackend::sendSliceWaveformCommand(int sliceId, const QString& command)
                   .arg(command));
 }
 
+void FlexBackend::sendTx(const QString& command, bool keying)
+{
+    if (!m_txSink) {
+        qCWarning(lcProtocol) << "FlexBackend: no operation-fenced TX command sink; refusing command";
+        return;
+    }
+    m_txSink(command, keying);
+}
+
 void FlexBackend::setKeying(bool key)
 {
     // Keying is only translated here; the interlock/authorization decision is
     // made above the seam (RFC §6). Matches RadioModel::setTransmit's wire form.
-    send(QStringLiteral("xmit %1").arg(key ? 1 : 0));
+    sendTx(QStringLiteral("xmit %1").arg(key ? 1 : 0), key);
 }
 
 void FlexBackend::setTune(bool on, int tunePowerPercent)
@@ -471,18 +485,18 @@ void FlexBackend::setTune(bool on, int tunePowerPercent)
     // FlexLib 4.2.18 Radio.TXTune. Power is a separate radio setting; do not
     // re-send it here. Host-modulating backends need it on this same verb.
     Q_UNUSED(tunePowerPercent);
-    send(QStringLiteral("transmit tune %1").arg(on ? 1 : 0));
+    sendTx(QStringLiteral("transmit tune %1").arg(on ? 1 : 0), on);
 }
 
 void FlexBackend::setAtu(bool start)
 {
     // FlexLib 4.2.18 Radio.ATUTuneStart / ATUTuneBypass.
-    send(start ? QStringLiteral("atu start") : QStringLiteral("atu bypass"));
+    sendTx(start ? QStringLiteral("atu start") : QStringLiteral("atu bypass"), start);
 }
 
 void FlexBackend::abortCwText()
 {
-    send(QStringLiteral("cwx clear"));
+    sendTx(QStringLiteral("cwx clear"), false);
 }
 
 void FlexBackend::invokeExtension(const QString& ns, const QString& verb,

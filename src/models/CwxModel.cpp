@@ -18,6 +18,17 @@ CwxModel::CwxModel(QObject* parent)
     : QObject(parent)
 {}
 
+CwxModel::~CwxModel()
+{
+    m_queueValid->store(false, std::memory_order_release);
+}
+
+CwxModel::TransmissionPermit CwxModel::queuedTransmissionPermit() const
+{
+    const std::shared_ptr<std::atomic<bool>> valid = m_queueValid;
+    return [valid] { return valid->load(std::memory_order_acquire); };
+}
+
 QString CwxModel::macro(int idx) const
 {
     if (idx < 0 || idx >= 12) return {};
@@ -302,6 +313,13 @@ void CwxModel::clearBuffer()
 }
 
 void CwxModel::resetDrainWatch()
+{
+    m_queueValid->store(false, std::memory_order_release);
+    m_queueValid = std::make_shared<std::atomic<bool>>(true);
+    abandonDrainWatch();
+}
+
+void CwxModel::abandonDrainWatch()
 {
     // Bumping the epoch invalidates any in-flight cwx-send reply so it can't
     // re-arm the watch for a batch the radio has discarded. Clearing the end

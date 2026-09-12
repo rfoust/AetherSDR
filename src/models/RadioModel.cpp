@@ -833,6 +833,9 @@ void RadioModel::setupBackend(const QString& family)
         }
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
             flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
+            flex->setTxCommandSink([this](const QString& cmd, bool keying) {
+                sendTxKeyingCommand(cmd, keying);
+            });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
             // moving slice encode behind the seam keeps TX safety above it.
             flex->setSliceCommandSink([this](const QString& cmd){
@@ -2495,11 +2498,15 @@ RadioModel::RadioModel(QObject* parent)
             return;
         // Track CWX send state so the interlock handler recognises local
         // CWX TX and doesn't force the audio gate off. (#2047, #2097)
-        if (cmd.startsWith("cwx send") || cmd.startsWith("cwx macro send"))
+        if (cmd.startsWith("cwx send") || cmd.startsWith("cwx macro send")) {
             m_cwxActive = true;
-        else if (cmd.startsWith("cwx clear")) {
+            sendCwxCommand(cmd, true);
+            return;
+        } else if (cmd.startsWith("cwx clear")) {
             m_cwxActive = false;
             m_cwxDrainArmed = false;  // ESC/clear aborts the drain watch (#3949)
+            sendCwxCommand(cmd, false);
+            return;
         }
         sendCmd(cmd);
     });
@@ -2550,7 +2557,7 @@ RadioModel::RadioModel(QObject* parent)
                 // An unknown-length tail appended to a tracked batch makes
                 // that old end index incomplete. Don't let it cut off the tail.
                 m_cwxDrainArmed = false;
-                m_cwxModel.resetDrainWatch();
+                m_cwxModel.abandonDrainWatch();
             }
             endLocalTxActivity(TxActivity::Cwx);
         }
@@ -2570,7 +2577,7 @@ RadioModel::RadioModel(QObject* parent)
         // the queueEmpty release below survives QSK break-in flicker. (#3949)
         m_cwxDrainArmed = true;
         const TxCoordinator::Operation operation = m_txOperation;
-        sendCmd(cmd, [this, operation, epoch, nChars](int respVal, const QString& body){
+        sendCwxCommand(cmd, true, [this, operation, epoch, nChars](int respVal, const QString& body){
             if (operation.sameOperation(m_txOperation)
                 && operation.permitsDispatch(txMonotonicMs())) {
                 m_cwxModel.handleSendReply(respVal, body, epoch, nChars);
@@ -5030,6 +5037,9 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
                                  std::function<void()> delivered)
 {
     const bool keying = baseCmd.endsWith(QLatin1String(" 1"));
+    if (keying) {
+        delivered = {};
+    }
     const TxCoordinator::Operation operation = keying ? m_txOperation : m_txCoordinator.cleanupFence();
     if (m_netCwStreamId == 0) {
         // No netcw stream — fall back to TCP immediate
@@ -5045,7 +5055,7 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
                 << " source=" << (debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource)
                 << " cmd=\"" << fallbackCmd << "\"";
         }
-        return sendNetCwTcp(fallbackCmd, operation, keying, std::move(delivered));
+        return sendTxTcpCommand(fallbackCmd, operation, keying, std::move(delivered));
     }
 
     // Build the full command with timing metadata and dedup index
@@ -5230,43 +5240,65 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     // FlexLib sends the same decorated netcw command over TCP after the UDP
     // copies.  With the 16-bit timestamp format above, the radio can dedupe
     // by index=N and the TCP path provides a reliable delivery backstop.
-    sendNetCwTcp(fullCmd, operation, keying, partDelivered);
+    sendTxTcpCommand(fullCmd, operation, keying, keying ? std::function<void()>{} : partDelivered);
     return parts != 0;
 }
 
-bool RadioModel::sendNetCwTcp(const QString& command, const TxCoordinator::Operation& operation,
-                            bool keying, std::function<void()> delivered)
+bool RadioModel::sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
+                                  bool keying, std::function<void()> delivered,
+                                  ResponseCallback reply, std::function<bool()> currentBatch)
 {
     const QPointer<RadioModel> receiver = this;
-    const auto notifyDelivered = [receiver, keying, delivered] {
-        if (!keying && receiver && delivered) {
-            QMetaObject::invokeMethod(receiver, delivered, Qt::QueuedConnection);
-        }
-    };
-    const auto permitted = [operation, keying] {
-        return keying ? operation.permitsDispatch(txMonotonicMs()) : operation.permitsCleanup();
+    const auto permitted = [operation, keying, currentBatch] {
+        return (!currentBatch || currentBatch())
+            && (keying ? operation.permitsDispatch(txMonotonicMs()) : operation.permitsCleanup());
     };
     if (m_wanConn) {
         // WAN's TLS writer is synchronous on the model's thread, unlike LAN.
         // Capture its identity and check authority immediately at that writer.
         const QPointer<WanConnection> connection = m_wanConn;
         if (connection && permitted()) {
-            connection->sendCommand(command);
-            notifyDelivered();
+            connection->sendCommand(command, std::move(reply));
+        } else if (reply) {
+            reply(kNoCommandPlaneCode, QStringLiteral("TX command cancelled before dispatch"));
+        }
+        if (receiver && delivered) {
+            QMetaObject::invokeMethod(receiver, delivered, Qt::QueuedConnection);
         }
         return true;
     }
     const QPointer<RadioConnection> connection = m_connection;
     if (!connection) {
+        if (reply) {
+            reply(kNoCommandPlaneCode, QStringLiteral("this radio has no command plane"));
+        }
         return false;
     }
     const quint32 seq = m_seqCounter.fetch_add(1);
-    QMetaObject::invokeMethod(connection, [connection, seq, command, permitted, notifyDelivered] {
-        if (!connection || !permitted()) {
-            return;
+    if (reply) {
+        m_pendingCallbacks.insert(seq, std::move(reply));
+    }
+    QMetaObject::invokeMethod(connection, [connection, receiver, seq, command, permitted, delivered] {
+        const bool dispatched = connection && permitted();
+        if (dispatched) {
+            connection->writeCommand(seq, command);
         }
-        connection->writeCommand(seq, command);
-        notifyDelivered();
+        if (receiver) {
+            QMetaObject::invokeMethod(receiver, [receiver, seq, dispatched, delivered] {
+                if (!receiver) {
+                    return;
+                }
+                if (!dispatched) {
+                    const ResponseCallback cancelled = receiver->m_pendingCallbacks.take(seq);
+                    if (cancelled) {
+                        cancelled(kNoCommandPlaneCode, QStringLiteral("TX command cancelled before dispatch"));
+                    }
+                }
+                if (receiver && delivered) {
+                    delivered();
+                }
+            }, Qt::QueuedConnection);
+        }
     }, Qt::QueuedConnection);
     return true;
 }

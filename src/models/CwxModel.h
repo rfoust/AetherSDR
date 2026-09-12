@@ -3,7 +3,9 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
+#include <atomic>
 #include <functional>
+#include <memory>
 
 namespace AetherSDR {
 
@@ -11,6 +13,7 @@ class CwxModel : public QObject {
     Q_OBJECT
 public:
     explicit CwxModel(QObject* parent = nullptr);
+    ~CwxModel() override;
 
     // A contiguous run of text to be keyed at a single WPM.
     // expandSpeedModifiers() returns a sequence of these.
@@ -43,6 +46,10 @@ public:
     // Actual-send operation fence, separate from a UI's read-only can-send
     // predicate. Checking whether a button is enabled must never acquire TX.
     using TransmissionPermit = std::function<bool()>;
+    // Capture on the model thread; the returned cancellation check may be
+    // read at a transport writer. It conveys batch validity, not TX authority,
+    // and never dereferences this QObject from a worker thread.
+    TransmissionPermit queuedTransmissionPermit() const;
     using TransmissionAdmission = std::function<TransmissionPermit()>;
     void setTransmissionAdmission(TransmissionAdmission admission) { m_transmissionAdmission = std::move(admission); }
     // Optional neutral backend dispatch. False rejects the batch before the
@@ -62,6 +69,9 @@ public:
     // (via RadioModel::onDisconnected) so a stale m_cwxEndIndex can't wedge the
     // monotonic guard across a reconnect. (#3949)
     void resetDrainWatch();
+    // An unknown-length macro appended to a batch invalidates its end index,
+    // but must not cancel text that is still queued for transport delivery.
+    void abandonDrainWatch();
     void setSpeed(int wpm);
     // Adopt a radio-authoritative speed without emitting a command back to the
     // radio. Used by non-Flex keyers after their connect-time readback.
@@ -133,6 +143,7 @@ private:
     bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit);
     TransmissionAdmission m_transmissionAdmission;
     TextSender m_textSender;
+    std::shared_ptr<std::atomic<bool>> m_queueValid{std::make_shared<std::atomic<bool>>(true)};
 
     int     m_speed{20};
     int     m_delay{5};
