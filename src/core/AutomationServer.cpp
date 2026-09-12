@@ -62,6 +62,7 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -2446,6 +2447,7 @@ bool AutomationServer::start(const QString& serverName)
 
 void AutomationServer::stop()
 {
+    ++m_txPermissionEpoch;
     if (m_meterWindowActive) {
         sampleMeterWindow();
         m_meterWindowActive = false;
@@ -2540,6 +2542,7 @@ void AutomationServer::setTxAllowed(bool allowed)
     if (m_txAllowed == allowed)
         return;  // idempotent
     m_txAllowed = allowed;
+    ++m_txPermissionEpoch;
     if (allowed) {
         // Start the force-unkey poller (mirrors the start()-time setup). The
         // TX_MAX_MS / TX_MAX_POWER limits are read unconditionally in start(),
@@ -3705,7 +3708,18 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     // sample can, and adopting a transmission this request did not cause means
     // force-unkeying it at m_txMaxKeyMs — the misattribution m_txBridgeInitiated
     // exists to prevent (#3646).
+    const QPointer<AutomationServer> self(this);
+    const bool previousKeyedSample = m_txKeyedAtRequestStart;
+    const TxCoordinator::Operation previousOperationSample = m_txOperationAtRequestStart;
+    const auto restoreSample = qScopeGuard([self, previousKeyedSample, previousOperationSample] {
+        if (self) {
+            self->m_txKeyedAtRequestStart = previousKeyedSample;
+            self->m_txOperationAtRequestStart = previousOperationSample;
+        }
+    });
     m_txKeyedAtRequestStart = false;
+    m_txOperationAtRequestStart = m_radioModel ? m_radioModel->transmitOperation()
+                                              : TxCoordinator::Operation{};
     if (m_radioModel) {
         const TransmitModel& tx = m_radioModel->transmitModel();
         m_txKeyedAtRequestStart =
@@ -4230,14 +4244,14 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             // (#3646 fidelity — re-entrancy crash fix)
             QPointer<QAction> ag = menuAction;
             QPointer<QMenu> mg = menu;
-            QTimer::singleShot(0, qApp, [ag, mg]() {
+            deferInvokeAction([ag, mg]() {
                 if (!ag) return;
                 // Activate the main window first so a menu action that opens a
                 // dialog / pops a menu has a valid active window (avoids the
                 // backgrounded null-QWindow popup crash). (#3646 follow-up)
                 raiseWindowForPopup(primaryTopLevelWindow());
                 triggerMenuAction(ag, mg);
-            });
+            }, transmitAction);
             done = true;
             deferred = true;
         } else if (action == QLatin1String("setChecked")) {
@@ -4255,7 +4269,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         if (!done) {
             return err(QStringLiteral("failed to invoke QAction: ") + target);
         }
-        if (transmitAction) {
+        if (transmitAction && !deferred) {
             markTxBridgeInitiated();
         }
 
@@ -4361,7 +4375,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                 action == QLatin1String("toggle") && b->isCheckable();
             QPointer<QAbstractButton> bg = b;
             QPointer<QWidget> win = b->window();
-            QTimer::singleShot(0, qApp, [bg, win, useToggle]() {
+            deferInvokeAction([bg, win, useToggle]() {
                 if (!bg) return;
                 // Activate the button's window first so a popup menu it raises
                 // has a valid active window (backgrounded automation otherwise
@@ -4369,7 +4383,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                 raiseWindowForPopup(win);
                 if (useToggle) bg->toggle();
                 else           bg->click();
-            });
+            }, transmitControl);
             done = true;
             deferred = true;
         }
@@ -4597,7 +4611,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
     if (!done)
         return err(QStringLiteral("action '") + action + QStringLiteral("' not applicable to ")
                    + shortClassName(w));
-    if (transmitControl) {
+    if (transmitControl && !deferred) {
         markTxBridgeInitiated();
     }
 
@@ -4636,6 +4650,10 @@ void AutomationServer::setClockModel(AetherClockModel* model)
 
 void AutomationServer::setRadioModel(RadioModel* model)
 {
+    if (m_radioModel != model) {
+        ++m_txPermissionEpoch;
+        clearTxBridgeInitiated();
+    }
     if (m_meterWindowActive) {
         sampleMeterWindow();
         m_meterWindowActive = false;
@@ -6845,8 +6863,7 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
 
     if (action == QLatin1String("off") || action == QLatin1String("stop")) {
         tx.stopTune();
-        m_txKeyedSinceMs = 0;
-        m_txBridgeInitiated = false;   // hand policing back: a later operator key is not ours
+        releaseEdgeHandsBackPolicing();
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("off")}};
     }
     if (action == QLatin1String("twotone")) {
@@ -6857,8 +6874,7 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
             return err(QStringLiteral("tune carrier is unavailable in the current radio mode"));
         }
         tx.startTwoToneTune();
-        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
-        m_txBridgeInitiated = true;   // the watchdog polices scripts, not people
+        markTxBridgeInitiated();
         qCInfo(lcAutomation) << "txtest two-tone started (ALLOW_TX)";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("twotone")}};
     }
@@ -7038,62 +7054,75 @@ QJsonObject AutomationServer::doAtu(const QString& action)
             return err(QStringLiteral("blocked: atu start keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
         tx.atuStart();
-        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();
-        m_txBridgeInitiated = true;
+        markTxBridgeInitiated();
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("atu"), QStringLiteral("start")}};
     }
     return err(QStringLiteral("unknown atu action: ") + action + QStringLiteral(" (bypass|start)"));
 }
 
-// Emergency all-stop: drop tune, two-tone, and MOX immediately. Used by the
-// watchdog and stop().
+// Stop only the captured compatibility operation. This is not yet per-client
+// authorization: integrations still share the desktop actor. Recheck after
+// each synchronous notification so cleanup cannot reach a replacement over.
 void AutomationServer::forceUnkey(const char* reason)
 {
-    if (!m_radioModel) {
+    if (!txBridgeOwnsCurrentTransmit()) {
         clearTxBridgeInitiated();
         return;
     }
-    auto& tx = m_radioModel->transmitModel();
-    tx.stopTune();
-    tx.setMox(false);
-    // Also abort any in-flight CWX keying: CWX is driven by its own buffer,
-    // largely independent of MOX, so setMox(false) alone won't stop a `cwx send`
-    // already keying CW. Without this the watchdog would fire repeatedly with no
-    // effect until the buffer drained — defeating the all-stop guarantee. (#3646)
-    m_radioModel->cwxModel().clearBuffer();
-    m_txKeyedSinceMs = 0;
-    m_txBridgeInitiated = false;
+    const QPointer<RadioModel> radio = m_radioModel;
+    const TxCoordinator::Operation operation = m_txBridgeOperation;
+    clearTxBridgeInitiated();
+    radio->requestTransmitStop(operation);
     qCWarning(lcAutomation).noquote() << "TX force-unkey:" << reason;
 }
 
 void AutomationServer::markTxBridgeInitiated()
 {
-    // Refuse to claim a transmission that was already up when this request
-    // arrived. This function runs *after* its action was issued, and the key
-    // verbs update TransmitModel optimistically, so the live keyed state cannot
-    // distinguish "this action keyed it" from "it was already keyed". Claiming
-    // the latter means force-unkeying an operator, DAX, TCI, or WSPR-beacon
-    // transmission at m_txMaxKeyMs — the misattribution this flag exists to
-    // prevent. The cost is that a bridge action layered on top of a live
-    // transmission goes unpoliced, which is the safe direction to fail.
-    if (m_txKeyedAtRequestStart)
+    markTxBridgeInitiated(m_txOperationAtRequestStart, m_txKeyedAtRequestStart);
+}
+
+void AutomationServer::markTxBridgeInitiated(const TxCoordinator::Operation& previous,
+                                            bool keyedBefore)
+{
+    if (!m_radioModel) {
         return;
-    m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();
+    }
+    const TxCoordinator::Operation operation = m_radioModel->transmitOperation();
+    if (m_txBridgeInitiated && operation.sameOperation(m_txBridgeOperation)) {
+        return; // Repeating key-on never buys another watchdog interval.
+    }
+    // Compare identity as well as keyed state: a CWX batch can own an operation
+    // while radio interlock is momentarily RX (QSK). A no-op/refused action
+    // cannot adopt that batch, or an operation that predates this request.
+    if (keyedBefore || operation.sameOperation(previous) || !operation.permitsCleanup()) {
+        return;
+    }
+    m_txBridgeOperation = operation;
+    m_txKeyClock.start();
     m_txBridgeInitiated = true;
 }
 
 void AutomationServer::clearTxBridgeInitiated()
 {
-    m_txKeyedSinceMs = 0;
-    m_txBridgeInitiated = false;   // a later operator key is not ours
+    m_txKeyClock.invalidate();
+    m_txBridgeOperation = {};
+    m_txBridgeInitiated = false;
 }
 
 bool AutomationServer::txBridgeOwnsCurrentTransmit() const
 {
-    if (!m_radioModel || !m_txBridgeInitiated)
+    if (!m_radioModel || !m_txBridgeInitiated || !m_txBridgeOperation.permitsCleanup()
+        || !m_txBridgeOperation.sameOperation(m_radioModel->transmitOperation())) {
         return false;
+    }
     const TransmitModel& tx = m_radioModel->transmitModel();
-    return tx.isTransmitting() || tx.isTuning() || tx.isMox();
+    // Pending key-on/CWX and QSK gaps retain the deadline even without an
+    // optimistic keyed flag. Normal local completion is not proof of RF idle;
+    // keep watching its reported tail, but never a newly admitted operation.
+    const qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return m_txBridgeOperation.permitsDispatch(now)
+        || tx.isTransmitting() || tx.isTuning() || tx.isMox();
 }
 
 // TX safety watchdog (#3646). The poller runs while automation TX permission is
@@ -7103,39 +7132,40 @@ bool AutomationServer::txBridgeOwnsCurrentTransmit() const
 // The limit is AETHER_AUTOMATION_TX_MAX_MS (default 20 s).
 void AutomationServer::onTxWatchdog()
 {
-    if (!m_radioModel)
-        return;
-    const auto& tx = m_radioModel->transmitModel();
-    const bool keyed = tx.isTransmitting() || tx.isTuning() || tx.isMox();
-    if (!keyed) {
-        m_txKeyedSinceMs = 0;
-        m_txBridgeInitiated = false;
+    if (!txBridgeOwnsCurrentTransmit()) {
+        clearTxBridgeInitiated();
         return;
     }
-
-    // ONLY police transmissions THIS BRIDGE STARTED.
-    //
-    // This watchdog exists as a backstop against a runaway script — something
-    // that keys and then crashes, loops, or loses its connection. It is not a
-    // transmit time limit for the operator, and it has no business being one:
-    // a net, a long over or a leisurely tune are all normal, and 20 seconds is
-    // nowhere near long enough for any of them.
-    //
-    // It previously armed on ANY keying, because it polls the transmit model
-    // rather than tracking who keyed. With the bridge enabled — which is a
-    // persisted setting, so it is on for ordinary sessions — the operator's own
-    // MOX and TUNE were force-unkeyed at exactly 20 seconds, mid-sentence, with
-    // nothing in the UI to explain it.
-    if (!m_txBridgeInitiated) {
-        m_txKeyedSinceMs = 0;
-        return;
-    }
-
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (m_txKeyedSinceMs == 0)
-        m_txKeyedSinceMs = now;
-    else if (now - m_txKeyedSinceMs > m_txMaxKeyMs)
+    if (m_txKeyClock.isValid() && m_txKeyClock.elapsed() >= m_txMaxKeyMs) {
         forceUnkey("max continuous key time exceeded");
+    }
+}
+
+void AutomationServer::deferInvokeAction(std::function<void()> action, bool transmitAction)
+{
+    const quint64 epoch = m_txPermissionEpoch;
+    const QPointer<RadioModel> radio = m_radioModel;
+    const QPointer<AutomationServer> self(this);
+    QTimer::singleShot(0, this, [self, epoch, radio, action = std::move(action), transmitAction] {
+        if (!self || (transmitAction && (!self->m_txAllowed || self->m_readOnly
+            || epoch != self->m_txPermissionEpoch || radio != self->m_radioModel))) {
+            return;
+        }
+        const TransmitModel* tx = radio ? &radio->transmitModel() : nullptr;
+        const bool keyedBefore = tx && (tx->isTransmitting() || tx->isTuning() || tx->isMox());
+        const TxCoordinator::Operation previous = radio ? radio->transmitOperation()
+                                                       : TxCoordinator::Operation{};
+        action();
+        if (self && transmitAction && radio && radio == self->m_radioModel) {
+            self->markTxBridgeInitiated(previous, keyedBefore);
+            // A widget callback may spin a nested loop. Revocation in that
+            // loop stopped the timer before this action could be attributed;
+            // do not leave a subsequently admitted operation without policing.
+            if (!self->m_txAllowed || self->m_readOnly || epoch != self->m_txPermissionEpoch) {
+                self->forceUnkey("permission changed during deferred TX action");
+            }
+        }
+    });
 }
 
 QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
@@ -8543,34 +8573,19 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
     m_certRunning = true;
     const auto clearRunning = qScopeGuard([this] {
         m_certRunning = false;
-        m_txKeyedSinceMs = 0;
-        m_txBridgeInitiated = false;
+        releaseEdgeHandsBackPolicing();
     });
 
-    // ARM THE WATCHDOG PER KEY, NOT PER RUN.
-    //
-    // Arming once around the whole diagnostic did not work, in both directions:
-    //
-    //   - onTxWatchdog() clears m_txBridgeInitiated on ANY poll that finds the
-    //     radio unkeyed. This run is idle for its first ~30 s and unkeys between
-    //     every stage, so the first poll disowned it and every subsequent key
-    //     went unpoliced — the exact opposite of the guarantee.
-    //   - m_txKeyedSinceMs was stamped once at run start, so the 20 s limit
-    //     elapsed against WALL CLOCK rather than continuous key time and
-    //     forceUnkey() landed mid-measurement, poisoning whichever stage was
-    //     running while the diagnostic still believed it was keyed.
-    //
-    // Every other keying verb arms immediately before each key and disarms
-    // after; the key observer makes this one do the same, so each individual key
-    // is owned and timed on its own.
+    // Each diagnostic key gets its own original operation and monotonic
+    // interval, not a deadline measured from the beginning of the whole run.
+    // Sampled pre-key identity prevents an already keyed operator being claimed
+    // if they start transmitting between this run's nested event-loop waits.
     RadioCertification cert(m_radioModel, m_audioEngine);
-    cert.setKeyObserver([this](bool on) {
+    cert.setKeyObserver([this](bool on, const TxCoordinator::Operation& previous, bool keyedBefore) {
         if (on) {
-            m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();
-            m_txBridgeInitiated = true;
+            markTxBridgeInitiated(previous, keyedBefore);
         } else {
-            m_txKeyedSinceMs = 0;
-            m_txBridgeInitiated = false;
+            releaseEdgeHandsBackPolicing();
         }
     });
     return cert.run(opts);
@@ -8660,16 +8675,14 @@ QJsonObject AutomationServer::doKey(const QString& name, const QString& arg)
             return err(QStringLiteral("blocked: key '") + what
                        + QStringLiteral("' keys the transmitter — set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
         m_radioModel->setTransmit(true);               // == space-bar PTT press (Mox)
-        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
-        m_txBridgeInitiated = true;   // the watchdog polices scripts, not people
+        markTxBridgeInitiated();
         qCInfo(lcAutomation).noquote() << "key" << what << "ON (ALLOW_TX)";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("key"), what},
                            {QStringLiteral("state"), QStringLiteral("on")}};
     };
     auto keyOff = [&](const QString& what) -> QJsonObject {
         m_radioModel->setTransmit(false);              // == space-bar PTT release
-        m_txKeyedSinceMs = 0;
-        m_txBridgeInitiated = false;   // hand policing back: a later operator key is not ours
+        releaseEdgeHandsBackPolicing();
         qCInfo(lcAutomation).noquote() << "key" << what << "OFF";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("key"), what},
                            {QStringLiteral("state"), QStringLiteral("off")}};
@@ -8729,8 +8742,7 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
     }
     if (a == QLatin1String("stop") || a == QLatin1String("abort") || a == QLatin1String("clear")) {
         cwx.clearBuffer();
-        m_txKeyedSinceMs = 0;
-        m_txBridgeInitiated = false;   // hand policing back: a later operator key is not ours
+        releaseEdgeHandsBackPolicing();
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("stop")}};
     }
     if (a == QLatin1String("send")) {
@@ -8746,9 +8758,8 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
             return err(QStringLiteral("blocked: cwx send keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
         }
-        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog
-        m_txBridgeInitiated = true;   // cwx keys the transmitter — the watchdog must police it
         cwx.send(text);
+        markTxBridgeInitiated();
         qCInfo(lcAutomation).noquote() << "cwx send" << text.length() << "chars (ALLOW_TX)";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("send")},
                            {QStringLiteral("chars"), text.length()}};
@@ -9018,13 +9029,8 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
     };
 }
 
-// A release edge hands TX policing back ONLY if the transmitter is actually
-// down. A release that did not un-key — the momentary handler declined it
-// (text entry focused, radio dropped) or TX is up from another source — must
-// leave the watchdog armed, or a leaked press would sit keyed with its only
-// backstop disarmed (Constitution VI: fail closed). onTxWatchdog() clears the
-// flag itself on the next poll that finds nothing keyed, so keeping it armed
-// here never over-polices.
+// A refused release or a normal tail retains policing of its original
+// operation. A later operation is never policed by the earlier claim.
 void AutomationServer::releaseEdgeHandsBackPolicing()
 {
     if (txBridgeOwnsCurrentTransmit())

@@ -22,6 +22,7 @@ class QWebSocket;
 #include "IConnectionAutomation.h"  // complete type: inline setter calls asQObject()
 #include "MemoryTelemetry.h"
 #include "MeterObservationWindow.h"
+#include "TxCoordinator.h"
 
 class QLocalServer;
 class QLocalSocket;
@@ -40,9 +41,10 @@ class AetherClockModel;
 //
 // Exposes a tiny line/JSON command channel over a QLocalServer so an external
 // agent can introspect, drive, and capture the GUI without driving OS
-// accessibility APIs or pixel-hunting through VNC. It is *off* in production
-// and only starts when the AETHER_AUTOMATION environment variable is set, so
-// it adds no attack surface or overhead to normal runs.
+// accessibility APIs or pixel-hunting through VNC. It is off by default;
+// AETHER_AUTOMATION or the persisted operator opt-in starts it. Current-user
+// endpoint access, optional token authentication and TX permission are separate
+// controls; enabled sessions remain an intentional control surface.
 //
 // Phase 0 verbs (read-only introspection + capture):
 //
@@ -364,7 +366,13 @@ public:
     // keying. Operator-driven from Radio Setup → Network; enforced in
     // handleLine so a client can't bypass it. Safe to toggle live. `ping` and
     // `whoami` report the current state.
-    void setReadOnly(bool readOnly) { m_readOnly = readOnly; }
+    void setReadOnly(bool readOnly)
+    {
+        if (m_readOnly != readOnly) {
+            ++m_txPermissionEpoch;
+            m_readOnly = readOnly;
+        }
+    }
     bool readOnly() const { return m_readOnly; }
 
 private slots:
@@ -372,9 +380,9 @@ private slots:
     void onReadyRead();
     void onDisconnected();
 
-    // TX safety watchdog (#3646): polls TX state and force-unkeys the radio if
-    // it has been keyed continuously past the limit, so a hung/abandoned
-    // automation script can never leave a live transmitter on.
+    // TX safety watchdog (#3646): requests scoped stop when the captured
+    // bridge operation exceeds its duration limit. This is best-effort cleanup,
+    // not qualified proof of RF idle or complete asynchronous producer fencing.
     void onTxWatchdog();
     // Push queued log events to subscribed clients (log subscribe). Runs on the
     // main thread so QLocalSocket writes are thread-confined; the tap that fills
@@ -627,13 +635,15 @@ private:
     QJsonObject doHealth();
     QJsonObject doAtu(const QString& action);
 
-    void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
+    void forceUnkey(const char* reason);  // captured-operation stop, never a later over
     // Claim the in-progress transmission for the bridge, so onTxWatchdog()
     // polices it. Call AFTER issuing a TX-capable action. Refuses to claim a
     // transmission that predates the request — see m_txKeyedAtRequestStart.
     void markTxBridgeInitiated();
+    void markTxBridgeInitiated(const TxCoordinator::Operation& previous, bool keyedBefore);
     void clearTxBridgeInitiated();
-    // Whether the radio is keyed AND this bridge is what keyed it. Gates the
+    void deferInvokeAction(std::function<void()> action, bool transmitAction);
+    // Whether the original operation or its reported tail is still ours. Gates the
     // force-unkey on bridge stop / TX-permission revoke so neither one ends an
     // operator, DAX, TCI, or beacon transmission that the bridge never started.
     bool txBridgeOwnsCurrentTransmit() const;
@@ -825,7 +835,9 @@ private:
     // TX safety rails. The timer runs while automation TX is allowed, but the
     // state machine arms only for an accepted automation-originated TX action.
     QTimer* m_txWatchdog{nullptr};
-    qint64  m_txKeyedSinceMs{0};   // when continuous key-down started (0 = idle)
+    QElapsedTimer m_txKeyClock;   // monotonic, never restarted by repeated key-on
+    TxCoordinator::Operation m_txBridgeOperation;
+    quint64 m_txPermissionEpoch{0}; // revocation fences already queued widget actions
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
     // True while the transmission in progress was started BY THIS BRIDGE. The
     // watchdog above is a runaway-script backstop, not an operator time limit,
@@ -841,6 +853,7 @@ private:
     // optimistically, so by then "keyed" cannot tell "this action keyed it"
     // apart from "it was already up".
     bool    m_txKeyedAtRequestStart{false};
+    TxCoordinator::Operation m_txOperationAtRequestStart;
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     // Correlates an extension reply with the request that caused it. Starts at

@@ -4662,9 +4662,9 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     // all and no non-Flex backend could ever be keyed -- the verb existed and
     // was wired to nothing.
     //
-    // Behaviour for Flex is unchanged: FlexBackend::setKeying sends the exact
-    // same "xmit N" through the same sink, and the only extra gate on that path
-    // matches "display pan set ", not "xmit".
+    // FlexBackend encodes the same "xmit N" behind the seam. Its dedicated TX
+    // sink carries the original operation fence through to the terminal writer;
+    // the generic command sink cannot bypass this admission.
     if (commandEpoch != m_txCommandEpoch
         || (tx ? !operation.permitsDispatch(txMonotonicMs()) : !cleanup.permitsCleanup())) {
         return;

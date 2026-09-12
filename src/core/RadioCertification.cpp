@@ -138,7 +138,7 @@ void RadioCertification::record(const QString& id, const QString& title,
     m_stages.append(stage);
 }
 
-void RadioCertification::setKeyObserver(std::function<void(bool)> observer)
+void RadioCertification::setKeyObserver(KeyObserver observer)
 {
     m_onKey = std::move(observer);
 }
@@ -155,15 +155,15 @@ bool RadioCertification::keyViaOperatorPath(bool on)
 {
     if (!m_radio)
         return false;
-    // Tell the observer BEFORE keying and AFTER the radio has ACTUALLY unkeyed,
-    // so the caller's safety window always encloses the transmission rather than
-    // trailing it.
-    if (on && m_onKey)
-        m_onKey(true);
+    const TxCoordinator::Operation previous = m_radio->transmitOperation();
+    const bool keyedBefore = keyedNow();
 
     auto& tx = m_radio->transmitModel();
     if (on) {
         tx.requestPttOn(TransmitModel::PttSource::Mox);
+        if (m_onKey) {
+            m_onKey(true, previous, keyedBefore);
+        }
 
         // CONFIRM THE KEY REACHED THE RADIO. requestPttOn returns void and
         // silently does nothing when runPttPreflight() refuses — a band-limit
@@ -176,7 +176,7 @@ bool RadioCertification::keyViaOperatorPath(bool on)
         if (!keyedNow()) {
             ++m_keyRefusals;
             if (m_onKey)
-                m_onKey(false);
+                m_onKey(false, previous, keyedBefore);
             return false;
         }
         return true;
@@ -196,7 +196,7 @@ bool RadioCertification::keyViaOperatorPath(bool on)
         spin(100);
 
     if (m_onKey)
-        m_onKey(false);
+        m_onKey(false, previous, keyedBefore);
     return !keyedNow();
 }
 

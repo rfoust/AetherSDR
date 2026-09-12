@@ -551,6 +551,12 @@ cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
 until the remaining producer/audio fences and qualified stop/recovery contract
 are complete. See `docs/aetherd-stage4-tx-coordinator.md`. This work does not
 widen `welcome`/capability serialization or replace #5598's RX PCM seam work.
+The bridge watchdog tracks the original engine operation with a monotonic,
+non-renewable deadline. A boolean keyed sample alone cannot establish ownership
+(CWX has QSK gaps); repeated commands must not renew that deadline. Deferred
+TX widget invocations recheck the captured permission epoch at execution and
+claim only after admission. These are compatibility-operation safeguards, not
+per-socket actor grants or qualified radio-idle evidence.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to

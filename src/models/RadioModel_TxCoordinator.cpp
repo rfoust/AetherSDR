@@ -1,6 +1,7 @@
 #include "RadioModel.h"
 #include "core/LogManager.h"
 
+#include <QPointer>
 #include <chrono>
 
 namespace AetherSDR {
@@ -78,9 +79,11 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
     }
     if (!m_txOperation.sameOperation(admission.operation)) {
         m_pendingTxDeliveries = 0;
+        m_txOperationActivities = 0;
     }
     m_txOperation = admission.operation;
     m_txActivities |= static_cast<unsigned>(activity);
+    m_txOperationActivities |= static_cast<unsigned>(activity);
     return true;
 }
 
@@ -156,30 +159,49 @@ void RadioModel::stopTxOperation(const TxCoordinator::Operation& operation,
     Q_UNUSED(reason);
     // TxCoordinator has already invalidated the keying fence and entered
     // recovery. All cleanup below is key-up/bypass/abort; never re-admit it.
-    m_transmitModel.cancelPttRelease();
-    const unsigned activities = m_txActivities;
-    if (activities & static_cast<unsigned>(TxActivity::Cwx)) {
-        m_cwxModel.clearBuffer();
-    }
-    if (activities & static_cast<unsigned>(TxActivity::CwKey)) {
-        sendCwKey(false);
-    }
-    if (activities & static_cast<unsigned>(TxActivity::CwPtt)) {
-        sendCwPtt(false);
-    }
-    if (activities & static_cast<unsigned>(TxActivity::Tune)) {
-        m_transmitModel.stopTune();
-    }
-    if (activities & static_cast<unsigned>(TxActivity::Atu)) {
-        m_transmitModel.atuBypass();
-    }
-    if (activities != 0) {
-        setTransmit(false);
-    }
+    requestTransmitStop(operation);
     m_txActivities = 0;
     m_txOperation = operation;
     // No acknowledgment here: queued stop commands are not stopped-radio
     // evidence. The lifecycle caller acknowledges only after transport loss.
+}
+
+void RadioModel::requestTransmitStop(const TxCoordinator::Operation& operation)
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    const QPointer<RadioModel> radio(this);
+    const auto current = [radio, operation] {
+        return radio && operation.permitsCleanup()
+            && operation.sameOperation(radio->m_txOperation);
+    };
+    if (!current()) {
+        return;
+    }
+    const unsigned activities = m_txActivities;
+    const bool hadCwx = m_txOperationActivities & static_cast<unsigned>(TxActivity::Cwx);
+    m_transmitModel.cancelPttRelease();
+    if (current() && hadCwx) {
+        m_cwxModel.clearBuffer();
+    }
+    if (current() && (activities & static_cast<unsigned>(TxActivity::CwKey))) {
+        sendCwKey(false);
+    }
+    if (current() && (activities & static_cast<unsigned>(TxActivity::CwPtt))) {
+        sendCwPtt(false);
+    }
+    if (current() && (activities & static_cast<unsigned>(TxActivity::Tune))) {
+        m_transmitModel.stopTune();
+    }
+    if (current() && (activities & static_cast<unsigned>(TxActivity::Atu))) {
+        m_transmitModel.atuBypass();
+    }
+    if (current()) {
+        // Also close a reported tail after normal local handoff. Do not touch
+        // ATU relay configuration unless this operation actually requested ATU.
+        m_transmitModel.setMox(false);
+    }
 }
 
 void RadioModel::resetTxOperations()

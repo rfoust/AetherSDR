@@ -160,6 +160,40 @@ not call presentation observers while the aggregate is partially destroyed.
 
 ## Deliberate limits and next increment
 
+### Bridge watchdog compatibility-operation fence
+
+The watchdog captures the engine operation produced by an accepted bridge
+action, not just a boolean claim. Pre-dispatch operation identity prevents
+adoption of an existing batch during an RX/QSK readback gap. Nested requests
+restore their caller's sample. A fresh local operation cannot inherit an older
+watchdog, and cleanup rechecks the captured identity after each synchronous
+notification. Cleanup covers MOX, TUNE, ATU, straight-key/CW PTT and CWX.
+
+The existing 20-second default is unchanged. Its clock is monotonic, repeated
+commands cannot extend it, and a pending operation or readback gap does not
+disarm it. Normal operator duration remains unbounded. The diagnostic's per-key
+observer receives pre-key identity/state after synchronous engine admission,
+before its first event-loop wait; it no longer claims a transmission in advance.
+
+Deferred bridge widget invocations capture their permission epoch, sample the
+operation at actual execution and claim after admission. Revocation, an
+observe-only transition, model replacement, bridge stop or destruction fences
+queued TX actions; re-enabling permission does not resurrect them.
+
+This is still the shared compatibility actor, not per-socket isolation or a
+solution for arbitrary asynchronous widget/keyer continuations. A normal local
+completion plus reported TX tail is not qualified stop evidence. The watchdog
+continues to use the existing stop entry points, not the coordinator's future
+cancel/expiry recovery path; independent client handoff remains disabled.
+
+`automation_tx_watchdog_test` injects a socket-free backend and exercises real
+engine admission, typed bridge requests, permission changes and deferred
+callbacks. It covers replacement between polls, repeated commands, refused and
+nested requests, RX gaps, CW/ATU cleanup and reentrant replacement during stop.
+It also waits for the production timer to expire an owned operation after
+initial permission enable and after disable/re-enable, without calling the poll
+handler directly.
+
 The daemon still advertises no TX permission or method. No credential
 provisioning, remote listener, TLS policy, device discovery or transmit default
 is changed. The bridge's existing permission gate and watchdog remain intact.

@@ -765,6 +765,24 @@ void queuedCwSessionAndTcpFences()
               "reset fences queued TCP fallback/backstop and UDP before their final writers");
     }
 }
+void scopedCompatibilityStop()
+{
+    Fixture f;
+    f.radio.cwxModel().send("CQ");
+    const TxCoordinator::Operation text = f.radio.transmitOperation();
+    check(!text.permitsDispatch(std::numeric_limits<qint64>::max()) && text.permitsCleanup(),
+          "radio-side text handoff retains only cleanup, not key-on authority");
+    f.commands.clear();
+    f.radio.requestTransmitStop(text);
+    check(f.commands.contains("cwx:abort") && !f.commands.contains("atu:off"),
+          "captured stop aborts a handed-off text tail without changing tuner configuration");
+    f.radio.setTransmit(true);
+    f.commands.clear();
+    f.radio.requestTransmitStop(text);
+    f.radio.requestTransmitStop({});
+    check(f.commands.isEmpty(), "stale and empty stop handles cannot affect replacement TX");
+}
+
 // Both test-injection entry points tear the old backend down, which closes
 // admission for the dying session. Neither is followed by an onConnected()
 // edge, so each has to drain the latch itself or every later TX intent in that
@@ -815,6 +833,7 @@ int main(int argc, char** argv)
     flexCwxLifecycle();
     queuedNetCwEdges();
     queuedCwSessionAndTcpFences();
+    scopedCompatibilityStop();
     testInjectionReopensAdmission();
     return failures ? 1 : 0;
 }

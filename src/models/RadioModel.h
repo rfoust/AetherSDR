@@ -814,6 +814,9 @@ public:
     // Snapshot for engine-owned deferred release. This is not a credential or
     // an invitation to borrow whichever operation happens to be current later.
     TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
+    // Best-effort stop of this captured compatibility operation only. This is
+    // not a cancellation/recovery acknowledgment or proof that RF has stopped.
+    void requestTransmitStop(const TxCoordinator::Operation& operation);
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     void sendCwKey(bool down, const QString& debugSource = {},
@@ -1754,6 +1757,7 @@ private:
     TxCoordinator::Operation m_txOperation;
     enum class TxActivity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
     unsigned m_txActivities{0};
+    unsigned m_txOperationActivities{0}; // includes radio-buffered tails after local handoff
     unsigned m_pendingTxDeliveries{0};
     bool m_txSessionClosing{false};
     quint64 m_txCommandEpoch{0};
