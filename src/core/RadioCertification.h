@@ -2,6 +2,7 @@
 
 #include "models/MeterModel.h"   // kMinForwardWattsForSwr — the keyed-RF floor
 #include "TxCoordinator.h"
+#include "models/TxController.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -100,7 +101,8 @@ public:
         int maxRfPowerPercent = -1;
     };
 
-    RadioCertification(RadioModel* radio, AudioEngine* audio);
+    RadioCertification(RadioModel* radio, AudioEngine* audio,
+                       std::shared_ptr<TxController> controller = {});
 
     // Called per key request (true = on, false = off or refused) so the caller
     // can police the admitted operation. This is not qualified RF readback.
@@ -241,6 +243,8 @@ private:
     // Every stage already opens with a null check, so this costs nothing.
     QPointer<RadioModel> m_radio;
     QPointer<AudioEngine> m_audio;
+    const std::shared_ptr<TxController> m_txController;
+    TxController::Input m_keyInput;
     KeyObserver m_onKey;
     int m_keyRefusals = 0;   // keys the radio refused; reported, never ignored
     QJsonArray m_stages;

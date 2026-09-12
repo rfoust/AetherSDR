@@ -1,7 +1,9 @@
 #include "RadioModel.h"
+#include "TxController.h"
 #include "core/LogManager.h"
 
 #include <QPointer>
+#include <QScopeGuard>
 
 namespace AetherSDR {
 
@@ -27,6 +29,23 @@ TxCoordinator::Producer RadioModel::registerTxProducer()
     return QThread::currentThread() == thread() ? m_txCoordinator.registerProducer() : TxCoordinator::Producer{};
 }
 
+std::shared_ptr<TxController> RadioModel::localTxController()
+{
+    if (QThread::currentThread() != thread()) {
+        return {};
+    }
+    if (!m_localTxController || !m_localTxController->valid()) {
+        m_localTxController = std::make_shared<TxController>(this);
+    }
+    return m_localTxController;
+}
+
+void RadioModel::setTxProducerAdmissionObserver(const TxCoordinator::Producer& producer,
+                                               std::function<void()> observer)
+{
+    m_txCoordinator.setProducerAdmissionObserver(producer, std::move(observer));
+}
+
 TxCoordinator::Context RadioModel::captureTxMedia(const TxCoordinator::Request& request) const
 {
     if (QThread::currentThread() != thread() || m_txSessionClosing || !m_backend) {
@@ -46,6 +65,61 @@ TxCoordinator::Context RadioModel::captureTxMedia(const TxCoordinator::Producer&
 bool RadioModel::beginLocalTxActivity(TxActivity activity)
 {
     return beginTxActivity(activity, nullptr);
+}
+
+bool RadioModel::producerRequestHasWork(const TxCoordinator::Request& request) const
+{
+    const TxCoordinator::Intent intent = m_txCoordinator.requestIntent(request);
+    const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+    if (!operation.permitsCleanup() || !operation.sameOperation(m_txOperation)) {
+        return false;
+    }
+    if (intent.pending()) { return true; }
+    if ((intent.isActivity(TxActivity::Mox) || intent.isActivity(TxActivity::CwPtt))
+        && hasOtherPttHolds(operation, intent)) {
+        // This contributor has handed back its hold. Any remaining carrier
+        // belongs to a compatible contributor, not to its finished watchdog.
+        return false;
+    }
+    return m_transmitModel.isTransmitting()
+        || m_transmitModel.isMox() || m_transmitModel.isTuning();
+}
+
+bool RadioModel::txProducerHasWork(const TxCoordinator::Producer& producer) const
+{
+    const auto requests = m_txCoordinator.producerRequests(producer);
+    return std::any_of(requests.begin(), requests.end(), [this](const auto& request) {
+        return producerRequestHasWork(request);
+    });
+}
+
+void RadioModel::abortTxProducerInputs(const TxCoordinator::Producer& producer,
+                                      TransmitModel::PttSource source)
+{
+    const QPointer<RadioModel> radio(this);
+    const auto requests = m_txCoordinator.producerRequests(producer);
+    // Generators first, PTT last. Includes derived sequencer elements whose
+    // owning UI/input callback has already returned; the engine retains each
+    // admitted request until its terminal cleanup is consumed.
+    for (const TxActivity activity : {TxActivity::Cwx, TxActivity::CwKey, TxActivity::CwPtt,
+                                      TxActivity::Atu, TxActivity::Tune, TxActivity::Mox}) {
+        for (const auto& request : requests) {
+            if (!radio) {
+                return;
+            }
+            if (!m_txCoordinator.requestIntent(request).isActivity(activity)) {
+                continue;
+            }
+            switch (activity) {
+            case TxActivity::Cwx: abortProducerCwx(request); break;
+            case TxActivity::CwKey: (void)requestProducerCw(request, false); break;
+            case TxActivity::CwPtt: (void)requestProducerCw(request, false, true); break;
+            case TxActivity::Atu: (void)requestProducerAtu(request, false); break;
+            case TxActivity::Tune: (void)requestProducerTune(request, false); break;
+            case TxActivity::Mox: abortProducerPtt(request, source); break;
+            }
+        }
+    }
 }
 
 bool RadioModel::requestProducerPttOn(const TxCoordinator::Request& request,
@@ -90,7 +164,7 @@ void RadioModel::requestProducerPttOff(const TxCoordinator::Request& request,
         return;
     }
     const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
-    if (m_txCoordinator.hasOtherIntents(operation, intent)) {
+    if (hasOtherPttHolds(operation, intent)) {
         endLocalTxActivity(intent);
         m_txRequested = activeTxActivities() & static_cast<unsigned>(TxActivity::Mox);
         return;
@@ -139,7 +213,20 @@ void RadioModel::abortProducerPtt(const TxCoordinator::Request& request,
 
 bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Request* request)
 {
+    if (m_txInputsStopping) {
+        return false;
+    }
     if (request && !m_txCoordinator.acceptsRequest(*request)) {
+        return false;
+    }
+    // TUNE/ATU use the backend's shared carrier/PTT latch, unlike compatible
+    // MOX holds. Their release cannot preserve another producer's carrier.
+    // Keep these combinations within one producer until a backend provides
+    // independent ownership; never silently transfer another caller's latch.
+    const unsigned carrierActivities = static_cast<unsigned>(TxActivity::Tune)
+        | static_cast<unsigned>(TxActivity::Atu);
+    if (m_txCoordinator.hasForeignIntents(m_txOperation, request,
+            (static_cast<unsigned>(activity) & carrierActivities) ? 0 : carrierActivities)) {
         return false;
     }
     if (activity == TxActivity::Tune || activity == TxActivity::Atu || activity == TxActivity::Cwx) {
@@ -255,6 +342,16 @@ bool RadioModel::beginTxActivity(TxActivity activity, const TxCoordinator::Reque
     m_txOperationActivities |= static_cast<unsigned>(activity);
     m_backend->setTransmitContext(m_txCoordinator.mediaContext(m_backendTxProducer,
         request ? m_txCoordinator.requestOperation(*request) : m_txOperation));
+    if (request) {
+        // Arm source-specific policing before a backend command or synchronous
+        // UI notification can enter a nested event loop. Recheck after it:
+        // observers may revoke this authorization or tear down the session.
+        m_txCoordinator.notifyProducerAdmission(*request);
+        if (!request->valid()) {
+            endLocalTxActivity(intent);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -329,6 +426,27 @@ bool RadioModel::requestProducerAtu(const TxCoordinator::Request& request, bool 
         m_transmitModel.requestAtu(false, route);
     }
     return accepted;
+}
+
+bool RadioModel::requestProducerAtuBypass(const TxCoordinator::Request& request)
+{
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    const TxCoordinator::Intent intent = m_txCoordinator.requestIntent(request);
+    if (intent.pending()) {
+        return requestProducerAtu(request, false);
+    }
+    // Bypass also configures idle ATU relays; it is not only a stop edge.
+    // Preserve that operation without letting it interrupt somebody else's
+    // matching cycle. The captured request fences delayed UI input/reconnects.
+    if (!request.valid() || m_txSessionClosing || !m_backend
+        || m_txCoordinator.hasOtherIntents(m_txOperation, {}, static_cast<unsigned>(TxActivity::Atu))) {
+        return false;
+    }
+    (void)m_txCoordinator.closeRequest(request);
+    m_transmitModel.atuBypass();
+    return true;
 }
 
 bool RadioModel::dispatchTuneIntent(bool on, const TxCoordinator::Request* request)
@@ -419,6 +537,18 @@ unsigned RadioModel::activeTxActivities() const
     return m_txCoordinator.activeActivities(m_txOperation);
 }
 
+bool RadioModel::hasOtherPttHolds(const TxCoordinator::Operation& operation,
+                                 const TxCoordinator::Intent& excluded) const
+{
+    // A CW element/text queue is not a manual PTT hold. In semi-break-in it
+    // only rides an already-held carrier; swallowing MOX-off for it strands
+    // the latch because its eventual key-up/text drain never releases MOX.
+    constexpr unsigned kHoldingActivities = static_cast<unsigned>(TxActivity::Mox)
+        | static_cast<unsigned>(TxActivity::CwPtt) | static_cast<unsigned>(TxActivity::Tune)
+        | static_cast<unsigned>(TxActivity::Atu);
+    return m_txCoordinator.hasOtherIntents(operation, excluded, kHoldingActivities, false);
+}
+
 void RadioModel::completeLocalTxIfDrained()
 {
     if (!m_txCoordinator.hasIntents(m_txOperation) && m_pendingTxDeliveries == 0) {
@@ -504,35 +634,47 @@ void RadioModel::sendTxKeyingCommand(const QString& command, const TxCoordinator
     }
 }
 
-bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const QString& text)
+bool RadioModel::requestProducerCwx(const TxCoordinator::Request& request, const QString& text,
+                                   std::function<void()> onAdmitted, int macroIndex, bool live)
 {
+    const QPointer<RadioModel> self(this);
     if (QThread::currentThread() != thread()) {
         return false;
     }
-    if (!cwTextValidationError(text).isEmpty()) {
+    if (macroIndex < 0 || macroIndex > 12 || (macroIndex == 0 && !cwTextValidationError(text).isEmpty())) {
         abortProducerCwx(request);
         return false;
     }
     bool admitted = false;
-    m_cwxModel.send(text, {
-        [this, request, &admitted]() -> CwxModel::TransmissionPermit {
-            if (!beginTxActivity(TxActivity::Cwx, &request)) {
+    const CwxModel::TransmissionRoute route{
+        [self, request, &admitted, &onAdmitted]() -> CwxModel::TransmissionPermit {
+            if (!self || !self->beginTxActivity(TxActivity::Cwx, &request) || !self) {
                 return {};
             }
             admitted = true;
-            const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(request);
+            const TxCoordinator::Operation operation = self->m_txCoordinator.requestOperation(request);
+            if (onAdmitted) {
+                onAdmitted();
+            }
             return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
         },
-        [this, request](const QString& value, int) {
-            return dispatchCwxText(value, m_txCoordinator.requestOperation(request));
+        [self, request](const QString& value, int) {
+            return self && self->dispatchCwxText(value, self->m_txCoordinator.requestOperation(request));
         },
-        [this, request](const QString& command, int epoch, int nChars) {
-            dispatchCwxCommand(command, m_txCoordinator.requestOperation(request), epoch, nChars);
+        [self, request](const QString& command, int epoch, int nChars) {
+            if (self) { self->dispatchCwxCommand(command, self->m_txCoordinator.requestOperation(request), epoch, nChars); }
         },
-        [this, request](int epoch, bool untrackedMacro) {
-            finishCwxDispatch(epoch, untrackedMacro, m_txCoordinator.requestIntent(request));
-        }});
-    if (!admitted) {
+        [self, request](int epoch, bool untrackedMacro) {
+            if (self) { self->finishCwxDispatch(epoch, untrackedMacro, self->m_txCoordinator.requestIntent(request)); }
+        }};
+    if (macroIndex != 0) {
+        m_cwxModel.sendMacro(macroIndex, route);
+    } else if (live) {
+        m_cwxModel.sendChar(text, route);
+    } else {
+        m_cwxModel.send(text, route);
+    }
+    if (self && !admitted) {
         abortProducerCwx(request);
     }
     return admitted;
@@ -687,8 +829,18 @@ void RadioModel::requestTransmitStop(const TxCoordinator::Operation& operation)
     if (!current()) {
         return;
     }
-    const unsigned activities = activeTxActivities();
+    const unsigned activities = activeTxActivities() | m_txOperationActivities;
     const bool hadCwx = m_txOperationActivities & static_cast<unsigned>(TxActivity::Cwx);
+    // Close every original input before notifications or terminal writers can
+    // reenter. This ends local intent, not ownership/recovery or radio state.
+    const bool wasStopping = m_txInputsStopping;
+    m_txInputsStopping = true;
+    const auto stopping = qScopeGuard([radio, wasStopping] {
+        if (radio) {
+            radio->m_txInputsStopping = wasStopping;
+        }
+    });
+    m_txCoordinator.finishLocalIntents(operation);
     m_transmitModel.cancelPttRelease();
     if (current() && hadCwx) {
         m_cwxModel.clearBuffer();
@@ -709,6 +861,40 @@ void RadioModel::requestTransmitStop(const TxCoordinator::Operation& operation)
         // Also close a reported tail after normal local handoff. Do not touch
         // ATU relay configuration unless this operation actually requested ATU.
         m_transmitModel.setMox(false);
+    }
+}
+
+void RadioModel::cancelLocalTransmit()
+{
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    m_txCoordinator.discardCapturedRequests();
+    m_cwInputSession.fetch_add(1, std::memory_order_release);
+    m_cwInputNotBefore = std::chrono::steady_clock::now();
+    if (m_txOperation.permitsCleanup()) {
+        requestTransmitStop(m_txOperation);
+    } else {
+        // The operator can also release a reported/manual radio TX for which
+        // this client never admitted a local operation. Stop-only, as before.
+        const QPointer<RadioModel> radio(this);
+        const bool wasStopping = m_txInputsStopping;
+        m_txInputsStopping = true;
+        const auto stopping = qScopeGuard([radio, wasStopping] {
+            if (radio) {
+                radio->m_txInputsStopping = wasStopping;
+            }
+        });
+        sendCwKey(false);
+        if (radio) {
+            radio->sendCwPtt(false);
+        }
+        if (radio) {
+            radio->m_transmitModel.stopTune();
+        }
+        if (radio) {
+            radio->setTransmit(false);
+        }
     }
 }
 
@@ -743,6 +929,28 @@ void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceI
         }
         sendCwKeyEdge(down, source, traceId, sourceMs, scheduledAt);
     }, Qt::QueuedConnection);
+}
+
+void RadioModel::queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
+                                       const QString& source, quint64 traceId, quint64 sourceMs,
+                                       std::chrono::steady_clock::time_point scheduledAt)
+{
+    QMetaObject::invokeMethod(this, [this, request, down, source, traceId, sourceMs, scheduledAt] {
+        if (m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
+            return;
+        }
+        (void)sendCwInput(down, false, false, source, traceId, sourceMs, scheduledAt, &request);
+    }, Qt::QueuedConnection);
+}
+
+void RadioModel::setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held)
+{
+    std::erase_if(m_producerCwPaddleInputs, [&input](const TxCoordinator::Request& existing) {
+        return !existing.valid() || existing.sameRequest(input);
+    });
+    if (held && input.valid()) {
+        m_producerCwPaddleInputs.push_back(input);
+    }
 }
 
 } // namespace AetherSDR

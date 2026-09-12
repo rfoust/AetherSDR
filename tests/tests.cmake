@@ -2302,9 +2302,11 @@ target_include_directories(client_reverb_test PRIVATE src)
 add_executable(iambic_keyer_test
     tests/iambic_keyer_test.cpp
     src/core/IambicKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/core/ThreadName.cpp
 )
 target_include_directories(iambic_keyer_test PRIVATE src)
+target_link_libraries(iambic_keyer_test PRIVATE Qt6::Core)
 if(UNIX)
     target_link_libraries(iambic_keyer_test PRIVATE pthread)
 endif()
@@ -3271,6 +3273,7 @@ target_link_libraries(ax25_link_timing_test PRIVATE Qt6::Core)
 add_test(NAME ax25_link_timing_test COMMAND ax25_link_timing_test)
 
 add_executable(pms_mailbox_test
+    src/core/TxCoordinator.cpp
     tests/pms_mailbox_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
@@ -3299,6 +3302,7 @@ add_test(NAME aprs_packet_test COMMAND aprs_packet_test)
 # (the qCWarning category used by the persistence paths); it drags in
 # AsyncLogWriter + AppSettings, same as ax25_libmodem_shim_test.
 add_executable(aprs_messenger_test
+    src/core/TxCoordinator.cpp
     tests/aprs_messenger_test.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsMessenger.cpp
@@ -3323,6 +3327,7 @@ add_test(NAME aprs_fill_in_digipeater_test COMMAND aprs_fill_in_digipeater_test)
 
 # Socket-free injected APRS frames, producer cancellation and queue admission.
 add_executable(aprs_digipeater_model_test
+    src/core/TxCoordinator.cpp
     tests/aprs_digipeater_model_test.cpp
     src/models/AprsDigipeaterModel.cpp
     src/core/aprs/AprsFillInDigipeater.cpp
@@ -3335,6 +3340,7 @@ target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
 add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)
 
 add_executable(tnc_terminal_test
+    src/core/TxCoordinator.cpp
     tests/tnc_terminal_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
@@ -3383,19 +3389,10 @@ add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
     src/gui/CwxPanel.h
-    src/models/CwxModel.cpp
-    src/models/CwxModel.h
-    # CwxPanel.cpp calls ThemeManager::resolve() post-Phase-2 migration;
-    # pull in the manager + its logging deps so the test links.
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(cwx_panel_test PRIVATE src)
 target_link_libraries(cwx_panel_test PRIVATE
-    Qt6::Core Qt6::Widgets
+    aetherdesktop_support Qt6::Core Qt6::Widgets
 )
 add_test(NAME cwx_panel_test COMMAND cwx_panel_test)
 set_tests_properties(cwx_panel_test PROPERTIES

@@ -173,7 +173,9 @@ Ax25HfPacketDecodeDialog* MainWindow::ensureAx25HfPacketDecodeDialog()
 
 QJsonObject MainWindow::automationModemCommand(const QString& verb,
                                                const QString& action,
-                                               const QString& value)
+                                               const QString& value,
+                                               const std::shared_ptr<TxController>& controller,
+                                               const TxController::Input& input)
 {
     Ax25HfPacketDecodeDialog* dlg = ensureAx25HfPacketDecodeDialog();
     if (!dlg) {
@@ -181,7 +183,7 @@ QJsonObject MainWindow::automationModemCommand(const QString& verb,
             {QStringLiteral("ok"), false},
             {QStringLiteral("error"), QStringLiteral("could not construct the AetherModem window")}};
     }
-    return dlg->automationCommand(verb, action, value);
+    return dlg->automationCommand(verb, action, value, controller, input);
 }
 
 // External-controller methods (FlexControl, HID encoders / RC-28 / TMate 2 /

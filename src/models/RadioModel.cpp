@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "TxController.h"
 #include "models/AprsDigipeaterModel.h"
 #include <QPointer>
 #include <QScopeGuard>
@@ -1901,6 +1902,7 @@ void RadioModel::teardownBackend()
     // here rather than only in onDisconnected(), because a family switch never
     // reaches that path — see hasWsprTxStream().
     m_wsprTxSeamAudioArmed = false;
+    m_wsprTxInput = {};
     m_backend.reset();
     acknowledgeTxTransportTeardown(m_txOperation);
     m_connection = nullptr;
@@ -2416,7 +2418,9 @@ RadioModel::RadioModel(QObject* parent)
         constexpr unsigned kCwActivities =
             static_cast<unsigned>(TxActivity::CwKey)
             | static_cast<unsigned>(TxActivity::Cwx);
-        if (m_cwKeyActive || m_cwPaddleHeld || m_cwxActive
+        const bool scopedPaddleHeld = std::any_of(m_producerCwPaddleInputs.begin(),
+            m_producerCwPaddleInputs.end(), [](const TxCoordinator::Request& input) { return input.valid(); });
+        if (m_cwKeyActive || m_cwPaddleHeld || scopedPaddleHeld || m_cwxActive
             || (activeTxActivities() & kCwActivities) != 0) {
             return tr("TUNE not started: CW is keyed");
         }
@@ -2511,11 +2515,16 @@ RadioModel::RadioModel(QObject* parent)
     // No CWX text while TUNE is active (#5422): the radio keys it at TUNE power.
     m_cwxModel.setSendAvailability([this] { return m_transmitModel.admitsCwxSend(); });
     m_cwxModel.setTransmissionAdmission([this]() -> CwxModel::TransmissionPermit {
-        if (!beginLocalTxActivity(TxActivity::Cwx)) {
+        const std::shared_ptr<TxController> controller = localTxController();
+        if (!controller) {
             return {};
         }
-        const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::Cwx);
-        return [intent] { return intent.permitsDispatch(txMonotonicMs()); };
+        const TxCoordinator::Request input = controller->capture(TxActivity::Cwx).request();
+        if (!beginTxActivity(TxActivity::Cwx, &input)) {
+            return {};
+        }
+        const TxCoordinator::Operation operation = m_txCoordinator.requestOperation(input);
+        return [operation] { return operation.permitsDispatch(txMonotonicMs()); };
     });
     connect(&m_cwxModel, &CwxModel::commandReady, this, [this](const QString& cmd){
         dispatchCwxCommand(cmd, m_cwxCommandOperation);
@@ -4569,7 +4578,8 @@ void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
     }
 }
 
-bool RadioModel::forwardNonFlexCwKeying(bool down)
+bool RadioModel::forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
+                                       const TxCoordinator::Completion& completion)
 {
     if (!m_backend) {
         return false;
@@ -4584,9 +4594,12 @@ bool RadioModel::forwardNonFlexCwKeying(bool down)
         return false;
     }
     emit backendCwKeyingForwarded(down);
+    if (!TxCoordinator::Command{operation, down}.permitsDispatch(txMonotonicMs())) {
+        return false;
+    }
     m_backend->setCwKeying(down, m_transmitModel.cwBreakIn(),
                            m_transmitModel.cwDelay(),
-                           down ? m_txOperation : m_txCoordinator.cleanupFence(), trackTxQueue(m_txOperation));
+                           operation, completion);
     return true;
 }
 
@@ -4629,9 +4642,17 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
             return false; // duplicate, unadmitted, or a previous connection
         }
         const TxCoordinator::Operation original = m_txCoordinator.requestOperation(*request);
-        if (m_txCoordinator.hasOtherIntents(original, intent)) {
+        if (hasOtherPttHolds(original, intent)) {
             // Compatible desktop contributors still share one actor. A
             // client's release ends only its contribution, never another's.
+            endLocalTxActivity(intent);
+            m_txRequested = activeTxActivities() & static_cast<unsigned>(TxActivity::Mox);
+            return true;
+        }
+    }
+    if (!tx && !request) {
+        intent = m_localTxIntents.value(TxActivity::Mox);
+        if (hasOtherPttHolds(m_txOperation, intent)) {
             endLocalTxActivity(intent);
             m_txRequested = activeTxActivities() & static_cast<unsigned>(TxActivity::Mox);
             return true;
@@ -4971,136 +4992,136 @@ QString RadioModel::audioCompressionParam() const
 void RadioModel::sendCwKey(bool down, const QString& debugSource,
                            quint64 debugTraceId, quint64 debugSourceMs)
 {
-    // No CW key-down while TUNE is active; key-up always passes (#5422).
-    // Backstop for every caller, including the TCI keyer verb.
-    if (!m_transmitModel.admitsCwKeyEdge(down)) {
-        qCWarning(lcCw).noquote() << "CW key-down refused: TUNE is active (#5422) source="
-                                  << (debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource);
-        return;
-    }
-    if (down && !beginLocalTxActivity(TxActivity::CwKey)) {
-        return;
-    }
-    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::CwKey);
-    if (!down) {
-        (void)m_txCoordinator.requestIntentEnd(intent);
-    }
-    bool deferred = false;
-    // Send only the key edge — the radio's break-in setting decides whether
-    // it transmits.  With break_in=1 (QSK), `cw key 1` triggers TX and
-    // break_in_delay holds the relay between elements.  With break_in=0,
-    // the radio queues the key but doesn't transmit until the operator
-    // explicitly asserts CW PTT (Space PTT, MOX, or hardware PTT) — the
-    // standard semi-break-in workflow per FlexLib Radio.cs:8890–8965.
-    if (m_backend && !usesFlexCommandPlane()) {
-        if (!forwardNonFlexCwKeying(down)) {
-            return;
-        }
-    } else {
-        deferred = sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                         debugSource, debugTraceId, debugSourceMs, {}, [this, down, intent] {
-            if (!down) {
-                endLocalTxActivity(intent);
-            }
-        });
-    }
-    const bool prev = m_cwKeyActive;
-    m_cwKeyActive = down;
-    if (prev != down)
-        emit cwKeyDownChanged(down);
-    if (!down && !deferred) {
-        endLocalTxActivity(intent);
-    }
+    (void)sendCwInput(down, false, true, debugSource, debugTraceId, debugSourceMs, {});
 }
 
 void RadioModel::sendCwPaddle(bool dit, bool dah, const QString& debugSource,
                               quint64 debugTraceId, quint64 debugSourceMs)
 {
-    // The radio's CW protocol does NOT accept a 2-arg paddle form like
-    // `cw key dit dah` — FlexLib only ever sends `cw key 1` or `cw key 0`
-    // (single state) and expects the client to do iambic timing locally.
-    // Treat any paddle press as a straight-key down so this path still
-    // works when the local iambic keyer is disabled.  When the keyer IS
-    // running it intercepts upstream and uses sendCwPtt + sendCwKeyEdge
-    // directly, bypassing this method.
+    // FlexLib sends one key state, not a two-argument paddle command. The
+    // local iambic worker supplies separately scheduled elements when enabled.
     sendCwKey(dit || dah, debugSource, debugTraceId, debugSourceMs);
 }
 
 void RadioModel::sendCwPtt(bool on, const QString& debugSource,
                            quint64 debugTraceId, quint64 debugSourceMs)
 {
-    if (on && !beginLocalTxActivity(TxActivity::CwPtt)) {
-        return;
-    }
-    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::CwPtt);
-    if (!on) {
-        (void)m_txCoordinator.requestIntentEnd(intent);
-    }
-    bool deferred = false;
-    if (m_backend && !usesFlexCommandPlane()) {
-        m_backend->setKeying(on, on ? m_txOperation : m_txCoordinator.cleanupFence(), trackTxQueue(m_txOperation));
-    } else {
-        deferred = sendNetCwCommand(on ? QStringLiteral("cw ptt 1") : QStringLiteral("cw ptt 0"),
-                         debugSource, debugTraceId, debugSourceMs, {}, [this, on, intent] {
-            if (!on) {
-                endLocalTxActivity(intent);
-            }
-        });
-    }
-    if (!on && !deferred) {
-        endLocalTxActivity(intent);
-    }
+    (void)sendCwInput(on, true, false, debugSource, debugTraceId, debugSourceMs, {});
 }
 
 void RadioModel::sendCwKeyEdge(bool down, const QString& debugSource,
                                quint64 debugTraceId, quint64 debugSourceMs,
                                std::chrono::steady_clock::time_point scheduledAt)
 {
-    // No CW key-down while TUNE is active; key-up always passes (#5422).
-    // Covers the local iambic keyer's elements when TUNE starts mid-train.
-    if (!m_transmitModel.admitsCwKeyEdge(down)) {
+    (void)sendCwInput(down, false, false, debugSource, debugTraceId, debugSourceMs, scheduledAt);
+}
+
+bool RadioModel::requestProducerCw(const TxCoordinator::Request& request, bool down,
+                                  bool ptt, bool notifySidetone,
+                                  std::chrono::steady_clock::time_point scheduledAt,
+                                  const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs)
+{
+    return sendCwInput(down, ptt, notifySidetone, debugSource, debugTraceId, debugSourceMs, scheduledAt, &request);
+}
+
+bool RadioModel::sendCwInput(bool down, bool ptt, bool notifySidetone,
+                            const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                            std::chrono::steady_clock::time_point scheduledAt,
+                            const TxCoordinator::Request* request)
+{
+    if (QThread::currentThread() != thread()) {
+        return false;
+    }
+    const TxActivity activity = ptt ? TxActivity::CwPtt : TxActivity::CwKey;
+    // TUNE refuses a key-down, never the key-up that releases an old element.
+    if (!ptt && !m_transmitModel.admitsCwKeyEdge(down)) {
         qCWarning(lcCw).noquote() << "CW key-down refused: TUNE is active (#5422) source="
                                   << (debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource);
-        return;
+        if (request) {
+            (void)m_txCoordinator.closeRequest(*request);
+        }
+        return false;
     }
-    if (down && !beginLocalTxActivity(TxActivity::CwKey)) {
-        return;
+    if (down && !beginTxActivity(activity, request)) {
+        if (request) {
+            (void)m_txCoordinator.closeRequest(*request);
+        }
+        return false;
     }
-    const TxCoordinator::Intent intent = m_localTxIntents.value(TxActivity::CwKey);
+    const TxCoordinator::Intent intent = request ? m_txCoordinator.requestIntent(*request)
+        : m_localTxIntents.value(activity);
+    const TxCoordinator::Operation original = request ? m_txCoordinator.requestOperation(*request) : m_txOperation;
+    const TxCoordinator::Operation operation = down || request ? original : m_txCoordinator.cleanupFence();
     if (!down) {
-        (void)m_txCoordinator.requestIntentEnd(intent);
+        if (request) {
+            if (!intent.isActivity(activity)) {
+                if (!intent.pending()) {
+                    (void)m_txCoordinator.closeRequest(*request);
+                }
+                return false;
+            }
+            if (!m_txCoordinator.closeRequest(*request).pending()) {
+                return false;
+            }
+            const unsigned compatible = ptt ? static_cast<unsigned>(TxActivity::Mox)
+                | static_cast<unsigned>(TxActivity::CwPtt) : static_cast<unsigned>(TxActivity::CwKey);
+            if (m_txCoordinator.hasOtherIntents(operation, intent, compatible, false)) {
+                endLocalTxActivity(intent);
+                return true;
+            }
+        } else {
+            (void)m_txCoordinator.requestIntentEnd(intent);
+        }
     }
+    const quint64 epoch = ++m_cwCommandEpoch;
+    const QPointer<RadioModel> receiver(this);
+    const auto finished = [receiver, down, intent] {
+        if (receiver && !down) {
+            receiver->endLocalTxActivity(intent);
+        }
+    };
     bool deferred = false;
+    bool accepted = false;
+    // Break-in remains the radio/backend's choice (FlexLib Radio.cs:8890-8965).
+    // A key edge alone does not invent CW PTT in semi-break-in mode.
     if (m_backend && !usesFlexCommandPlane()) {
-        // `scheduledAt` stops here on this branch: setCwKeying() carries no
-        // timestamp, so a non-Flex backend applies the edge at forward time
-        // (worker wake plus its queued thread hop), uncorrected.  Only the
-        // Flex netcw path below back-dates time= to the scheduled instant;
-        // the sidetone and trace consume the instant upstream either way.
-        if (!forwardNonFlexCwKeying(down)) {
-            return;
+        // Non-Flex backends apply edges at forward time. Only NetCW below
+        // back-dates the radio timestamp; the sidetone still uses scheduledAt.
+        const TxCoordinator::Completion completion = trackTxQueue(original, finished);
+        deferred = true;
+        if (ptt && TxCoordinator::Command{operation, down}.permitsDispatch(txMonotonicMs())) {
+            m_backend->setKeying(down, operation, completion);
+            accepted = true;
+        } else if (!ptt) {
+            accepted = forwardNonFlexCwKeying(down, operation, completion);
         }
     } else {
-        deferred = sendNetCwCommand(QString("cw key %1").arg(down ? 1 : 0),
-                         debugSource, debugTraceId, debugSourceMs, scheduledAt, [this, down, intent] {
-            if (!down) {
-                endLocalTxActivity(intent);
-            }
-        });
+        const QString command = ptt ? (down ? QStringLiteral("cw ptt 1") : QStringLiteral("cw ptt 0"))
+            : QString("cw key %1").arg(down ? 1 : 0);
+        deferred = sendNetCwCommand(command, debugSource, debugTraceId, debugSourceMs,
+                                    scheduledAt, finished, &operation);
+        accepted = deferred;
     }
-    // Deliberately no cwKeyDownChanged here.  This is the local iambic
-    // keyer's path, and its producer already drove the sidetone gate at the
-    // element's own scheduled instant (MainWindow_Session.cpp, #4890/#4942).
-    // Echoing would queue a second, wall-clock-stamped edge for the same
-    // element, raising CwSidetoneGenerator's monotonic floor to wake time
-    // and re-timing the following element to the GUI thread's rhythm — or,
-    // when the queued hop lands after the element ended, re-keying the gate
-    // for a spurious blip (#4976).  m_cwKeyActive is still tracked: it feeds
-    // the TX-ownership interlock alongside m_cwxActive.
-    m_cwKeyActive = down;
+    if (accepted && epoch == m_cwCommandEpoch && !ptt) {
+        const bool previous = m_cwKeyActive;
+        m_cwKeyActive = down;
+        // Iambic output already drove monitor/recorder sidetone at the
+        // element's scheduled instant. A second queued echo would retime it
+        // to GUI wake time or create a spurious late blip (#4976).
+        if (notifySidetone && previous != down) {
+            emit cwKeyDownChanged(down);
+        }
+    }
     if (!down && !deferred) {
         endLocalTxActivity(intent);
     }
+    if (down && !accepted) {
+        if (request) {
+            (void)m_txCoordinator.closeRequest(*request);
+        }
+        endLocalTxActivity(intent);
+    }
+    return accepted;
 }
 
 // ── NetCW stream — VITA-49 UDP delivery with redundant sends ────────────────
@@ -5143,13 +5164,18 @@ QByteArray RadioModel::buildNetCwPacket(const QByteArray& payload)
 bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSource,
                                   quint64 debugTraceId, quint64 debugSourceMs,
                                  std::chrono::steady_clock::time_point scheduledAt,
-                                 std::function<void()> delivered)
+                                 std::function<void()> delivered,
+                                 const TxCoordinator::Operation* captured)
 {
     const bool keying = baseCmd.endsWith(QLatin1String(" 1"));
     if (keying) {
         delivered = {};
     }
-    const TxCoordinator::Operation operation = keying ? m_txOperation : m_txCoordinator.cleanupFence();
+    const TxCoordinator::Operation operation = captured ? *captured
+        : keying ? m_txOperation : m_txCoordinator.cleanupFence();
+    if (!TxCoordinator::Command{operation, keying}.permitsDispatch(txMonotonicMs())) {
+        return false;
+    }
     if (m_netCwStreamId == 0) {
         // No netcw stream — fall back to TCP immediate
         const QString fallbackCmd = baseCmd.contains("cw key")
@@ -7705,6 +7731,7 @@ void RadioModel::onDisconnected()
     m_txRequested = false;
     m_cwKeyActive = false;
     m_cwPaddleHeld = false;   // a paddle held across a disconnect must not keep TUNE refused (#5422)
+    m_producerCwPaddleInputs.clear();
     m_cwxActive = false;
     m_cwxDrainArmed = false;
     // Reset the CWX drain watch and bump its epoch so a watch armed mid-macro
@@ -7747,6 +7774,7 @@ void RadioModel::onDisconnected()
     m_wsprTxRestoreDax = false;
     m_wsprTxPreviousDax = false;
     m_wsprTxSeamAudioArmed = false;
+    m_wsprTxInput = {};
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -12312,15 +12340,25 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
             if (m_wsprTxOwnershipRequested) {
                 sendCmd(QStringLiteral("stream set %1 tx=1").arg(hexId(id)));
             } else if (m_wsprTxReleaseWhenReady) {
-                sendCmd(QStringLiteral("stream set %1 tx=0").arg(hexId(id)));
                 m_wsprTxReleaseWhenReady = false;
+                sendCmd(QStringLiteral("stream set %1 tx=0").arg(hexId(id)));
             }
         });
     return true;
 }
 
-bool RadioModel::prepareWsprTransmit()
+bool RadioModel::prepareWsprTransmit(const TxCoordinator::Request& input)
 {
+    const TxCoordinator::Request request = input;
+    if (!m_txCoordinator.ownsRequest(request) || !request.valid() || m_wsprTxTransition) { return false; }
+    if (m_wsprTxInput.originalSessionCurrent()) {
+        return request.sameRequest(m_wsprTxInput);
+    }
+    const QPointer<RadioModel> self(this);
+    m_wsprTxTransition = true;
+    const auto transition = qScopeGuard([self] {
+        if (self) { self->m_wsprTxTransition = false; }
+    });
     // Fail closed on an RX-only family before borrowing any station state. The
     // UI refuses earlier with an operator-visible reason; this is the backstop
     // so a future caller cannot reach the DAX/PTT path on a backend that has no
@@ -12344,6 +12382,7 @@ bool RadioModel::prepareWsprTransmit()
     // Any backend whose transmit audio leaves through the seam, not only one
     // that modulates locally — the beacon reaches submitTxAudio either way.
     if (backendCapabilities().takesTxAudioOverSeam) {
+        m_wsprTxInput = request;
         m_wsprTxSeamAudioArmed = true;
         return true;
     }
@@ -12363,37 +12402,53 @@ bool RadioModel::prepareWsprTransmit()
     // releaseWsprTransmit(). Leaving dax=1 latched would silently kill the
     // next mic voice TX on every platform where updateDaxTxMode() is compiled
     // out (Windows / Linux without PipeWire). Mirrors the AX.25 TX path.
+    m_wsprTxInput = request;
     m_wsprTxPreviousDax = m_transmitModel.daxOn();
     m_wsprTxRestoreDax = true;
-    m_transmitModel.setDax(true);
     m_wsprTxYieldAfterUse = !m_daxTxActive;
     m_wsprTxOwnershipRequested = true;
     m_wsprTxReleaseWhenReady = false;
-    if (!ensureDaxTxStream(DaxTxRequestReason::WsprBeacon)) {
-        m_wsprTxOwnershipRequested = false;
-        m_wsprTxYieldAfterUse = false;
-        restoreWsprTransmitDax();
+    const auto current = [self, request] {
+        return self && request.valid() && request.sameRequest(self->m_wsprTxInput);
+    };
+    m_transmitModel.setDax(true);
+    if (!current()) { return false; }
+    const bool ready = ensureDaxTxStream(DaxTxRequestReason::WsprBeacon);
+    if (!current()) { return false; }
+    if (!ready) {
+        releaseWsprTransmit(request);
         return false;
     }
     if (m_daxTxStreamId != 0) {
         sendCmd(QStringLiteral("stream set %1 tx=1")
                     .arg(hexId(m_daxTxStreamId)));
     }
-    return true;
+    return current();
 }
 
-void RadioModel::releaseWsprTransmit()
+void RadioModel::releaseWsprTransmit(const TxCoordinator::Request& input)
 {
+    const TxCoordinator::Request request = input;
+    if (!request.sameRequest(m_wsprTxInput)) { return; }
+    const QPointer<RadioModel> self(this);
+    const bool wasTransitioning = std::exchange(m_wsprTxTransition, true);
+    const auto transition = qScopeGuard([self, wasTransitioning] {
+        if (self) { self->m_wsprTxTransition = wasTransitioning; }
+    });
+    m_wsprTxInput = {};
+    const bool seamAudio = std::exchange(m_wsprTxSeamAudioArmed, false);
+    const bool ownership = std::exchange(m_wsprTxOwnershipRequested, false);
+    const bool yield = std::exchange(m_wsprTxYieldAfterUse, false);
+    const bool restoreDax = std::exchange(m_wsprTxRestoreDax, false);
+    const bool previousDax = m_wsprTxPreviousDax;
+    if (!request.originalSessionCurrent()) { return; }
     // Seam audio: nothing was borrowed, so nothing is handed back. Dropping
     // the latch is the whole release — and it must happen before the DAX arm so
     // a stale m_daxTxStreamId from an earlier Flex session in the same process
     // cannot make this path issue `stream set … tx=0` at a radio that has no
     // such stream.
-    if (m_wsprTxSeamAudioArmed) {
-        m_wsprTxSeamAudioArmed = false;
-        return;
-    }
-    if (m_wsprTxOwnershipRequested && m_wsprTxYieldAfterUse) {
+    if (seamAudio) { return; }
+    if (ownership && yield) {
         if (m_daxTxStreamId != 0) {
             sendCmd(QStringLiteral("stream set %1 tx=0")
                         .arg(hexId(m_daxTxStreamId)));
@@ -12401,21 +12456,10 @@ void RadioModel::releaseWsprTransmit()
             m_wsprTxReleaseWhenReady = true;
         }
     }
-    m_wsprTxOwnershipRequested = false;
-    m_wsprTxYieldAfterUse = false;
-    restoreWsprTransmitDax();
-}
-
-// Hand `transmit dax` back to whatever owned it before the beacon armed.
-// Only writes when the beacon actually changed it, so an operator (or DAX2)
-// that already had dax=1 never sees a redundant command.
-void RadioModel::restoreWsprTransmitDax()
-{
-    if (!m_wsprTxRestoreDax)
-        return;
-    m_wsprTxRestoreDax = false;
-    if (m_transmitModel.daxOn() != m_wsprTxPreviousDax)
-        m_transmitModel.setDax(m_wsprTxPreviousDax);
+    if (self && request.originalSessionCurrent() && restoreDax
+        && m_transmitModel.daxOn() != previousDax) {
+        m_transmitModel.setDax(previousDax);
+    }
 }
 
 QJsonObject RadioModel::troubleshootingSnapshot() const

@@ -4,9 +4,9 @@ This is the first Stage 4 increment of RFC #3849, after the receive-control
 milestone (#5563). It does **not** enable daemon transmission or complete the
 RFC's multi-client TX arbiter.
 
-The command-queue follow-up extends that foundation, not its authority:
-primary Flex commands and CWX text now carry cancellation to the terminal
-TCP writer. The desktop compatibility actor remains shared.
+The producer-ownership follow-up extends that foundation, not its authority:
+commands and TX audio carry their original producer input through local queues
+and terminal writers. The desktop compatibility actor remains shared.
 
 ## Authority and ownership
 
@@ -72,10 +72,25 @@ activity mask still records which radio-buffered paths might need cleanup.
 The compatibility slots remain for not-yet-converted local activity entry
 points. CAT PTT/CW text and TCI now retain separate accepted-session producer handles.
 Serial/PTY CAT uses its configured endpoint lifetime, not a guessed process ID.
-AX.25 and WSPR retain their controller lifetime and a request for each scheduled
-transmission. Bridge authorization-lifetime and other local-keyer conversions
-remain separate work; a short-lived MCP request socket is not a TX producer.
+AX.25, WSPR, native keyboard/device inputs and bridge actions retain their
+controller lifetime and original input. A short-lived MCP request socket is
+not a TX producer: the bridge producer follows its trusted authorization.
 Normal tail consumption remains local bookkeeping, never radio-stop proof.
+
+`TxController` is an engine-owned facade, not another actor. A compound input
+view captures one root before delivery; subsequent button phases and sequence
+elements cannot renew that root after cancellation. Native device callbacks
+capture the root before their first queued hop. Device close advances an atomic
+input epoch; reopening can accept fresh input without rehabilitating an old
+queued press or letting its release consume a newer hold.
+
+Packet program roots are captured when the operator or authorized controller
+arms receive replies, a beacon, digipeating, PMS or a terminal session. Retries
+and generated frames derive from that root, never from the session current at
+timer/output time. Stored message history deliberately contains no persistent
+TX authority. KISS frames use their accepted client's producer. WSPR retains
+its schedule root through PTT, borrowed audio-route cleanup and generation-
+matched pump/generator stop; another program cannot overwrite that route.
 
 Explicit TUNE, ATU and CW-text controller routes preserve the existing model
 preflight, speed expansion and UI notifications while carrying a captured
@@ -190,10 +205,11 @@ Normal key-up retains the operation until both participating transport queues
 consume it (including the final UDP copy), so a short element
 does not lose its already-queued key-down. This is transport completion, not
 proof of RF reception or radio-idle state.
-Iambic producer-thread input captures a session generation before queueing onto
-the model; reset/reconnect and the scheduled-time floor reject old-session edges
-before either Flex or non-Flex delivery. This is session isolation, not yet
-per-producer authorization within a shared desktop operation.
+Iambic producer-thread input retains the original paddle root through derived
+elements and normal mode-B tails. Reset/reconnect, producer closure and the
+scheduled-time floor reject stale RF edges before either Flex or non-Flex
+delivery. Cancelled input may still drive local practice sidetone; local
+monitoring is not RF authority.
 
 ### Primary Flex and CWX command queues
 
@@ -241,14 +257,12 @@ not call presentation observers while the aggregate is partially destroyed.
 
 ## Deliberate limits and next increment
 
-### Bridge watchdog compatibility-operation fence
+### Bridge authorization-lifetime ownership
 
-The watchdog captures the engine operation produced by an accepted bridge
-action, not just a boolean claim. Pre-dispatch operation identity prevents
-adoption of an existing batch during an RX/QSK readback gap. Nested requests
-restore their caller's sample. A fresh local operation cannot inherit an older
-watchdog, and cleanup rechecks the captured identity after each synchronous
-notification. Cleanup covers MOX, TUNE, ATU, straight-key/CW PTT and CWX.
+The watchdog observes actual engine admission by its own producer. It neither
+adopts another contributor's shared operation nor infers ownership from the
+radio's TX flag. Cleanup covers only its captured MOX, TUNE, ATU, straight-key/
+CW PTT and CWX contributions; a later compatible CAT/manual hold survives.
 
 The existing 20-second default is unchanged. Its clock is monotonic, repeated
 commands cannot extend it, and a pending operation or readback gap does not
@@ -256,14 +270,22 @@ disarm it. Normal operator duration remains unbounded. The diagnostic's per-key
 observer receives pre-key identity/state after synchronous engine admission,
 before its first event-loop wait; it no longer claims a transmission in advance.
 
-Deferred bridge widget invocations capture their permission epoch, sample the
-operation at actual execution and claim after admission. Revocation, an
+Deferred bridge widget invocations capture their original input before queueing
+and claim only after engine admission. Revocation, an
 observe-only transition, model replacement, bridge stop or destruction fences
 queued TX actions; re-enabling permission does not resurrect them.
 
-This is still the shared compatibility actor, not per-socket isolation or a
-solution for arbitrary asynchronous widget/keyer continuations. A normal local
-completion plus reported TX tail is not qualified stop evidence. The watchdog
+Registered TX buttons and shortcuts call the same typed controller actions as
+the native UI. Pointer press/move retain focus, down state and hit testing;
+only an explicit release inside activates. Cancellation, disconnect and gesture
+timeout cannot turn into a TX click. Keyboard events carry typed source identity
+through the real application filters, separate from native held-key state.
+Unknown/unregistered keying controls fail closed rather than borrowing a native
+operator callback. The peripheral SPE front-panel TUNE route is not converted
+to radio ATU and remains unavailable through these scoped bridge actions.
+
+This is still the shared compatibility actor, not independent actor arbitration.
+A normal local completion plus reported TX tail is not qualified stop evidence. The watchdog
 continues to use the existing stop entry points, not the coordinator's future
 cancel/expiry recovery path; independent client handoff remains disabled.
 
@@ -285,9 +307,10 @@ relying on callers to avoid treating local completion as handoff authority.
 Cancellation, revocation, expiry and reset also retain and stop an unconfirmed
 tail, not just an operation whose local intent is still active. The same actor's
 unbounded desktop reengagement remains compatible with existing controls.
-The remaining work must propagate per-client actors through all integration
-and audio producers, bind bounded actor expiry to engine scheduling, complete
-qualified stop/readback recovery and fence remaining queued audio/wire paths.
+The remaining work must assign independent trusted actor grants to the now-
+identified producers, bind bounded actor expiry to engine scheduling and
+complete qualified stop/readback recovery. Peripheral transmit mechanisms need
+their own explicit contract; this increment does not grant them radio authority.
 Only after that coverage is demonstrated can daemon TX grants be considered.
 The separately tracked CW/TUNE UX interlock in #5513 is not replaced here.
 
@@ -319,7 +342,8 @@ The private test-only terminal writers in `PanadapterStream` and
 `RadioConnection` allow these queue tests to exercise production dispatch without
 initializing sockets or substituting synthetic radio firmware.
 
-Native Demo/MCP checks with TX disabled can establish launch, identity,
-receive-path and refusal behavior. They cannot establish over-the-air CW
+Native Demo/MCP checks with TX disabled can establish launch, identity and
+positive receive-path behavior. Non-events and TX refusals belong in the
+socket-free injected regressions, not a Demo observation. Neither can establish over-the-air CW
 timing, an amplifier's response, or RADE RF tail quality; those require
 separately authorized hardware verification.

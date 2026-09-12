@@ -56,6 +56,7 @@
 #include <QElapsedTimer>
 
 namespace AetherSDR {
+class TxController;
 
 inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabilities)
 {
@@ -574,6 +575,7 @@ public:
     // serial slot), so the TUNE-start refusal cannot slip through the gap
     // between two iambic elements when m_cwKeyActive is momentarily false.
     void    setCwPaddleHeld(bool held) { m_cwPaddleHeld = held; }
+    void setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held);
     void    setBinauralRx(bool on);  // optimistic update + radio command
     bool    muteLocalWhenRemote() const { return m_muteLocalWhenRemote; }
     bool    autoSave() const { return m_autoSave; }
@@ -646,9 +648,8 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
-    bool prepareWsprTransmit();
-    void releaseWsprTransmit();
-    void restoreWsprTransmitDax();
+    bool prepareWsprTransmit(const TxCoordinator::Request& input);
+    void releaseWsprTransmit(const TxCoordinator::Request& input);
     // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
     // literally a `dax_tx` stream; on a seam-audio backend (HL2 or Icom) there
     // is no stream to own — the pump feeds the backend through
@@ -847,6 +848,12 @@ public:
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
     TxCoordinator::Producer registerTxProducer();
+    // Trusted local operator control surface. UI buttons and equivalent
+    // keyboard/MIDI toggles share this producer; external clients must bring
+    // their own lifetime instead of borrowing it.
+    std::shared_ptr<TxController> localTxController();
+    void setTxProducerAdmissionObserver(const TxCoordinator::Producer& producer,
+                                        std::function<void()> observer);
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Request& request) const;
     bool setProducerTransmit(const TxCoordinator::Request& request, bool tx,
@@ -856,11 +863,28 @@ public:
     void abortProducerPtt(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     bool requestProducerTune(const TxCoordinator::Request& request, bool on, bool twoTone = false);
     bool requestProducerAtu(const TxCoordinator::Request& request, bool start);
-    bool requestProducerCwx(const TxCoordinator::Request& request, const QString& text);
+    bool requestProducerAtuBypass(const TxCoordinator::Request& request);
+    bool requestProducerCwx(const TxCoordinator::Request& request, const QString& text,
+                            std::function<void()> admitted = {}, int macroIndex = 0, bool live = false);
     void abortProducerCwx(const TxCoordinator::Request& request);
+    bool requestProducerCw(const TxCoordinator::Request& request, bool down, bool ptt = false,
+                           bool notifySidetone = true,
+                           std::chrono::steady_clock::time_point scheduledAt = {},
+                           const QString& debugSource = {}, quint64 debugTraceId = 0,
+                           quint64 debugSourceMs = 0);
+    bool producerRequestHasWork(const TxCoordinator::Request& request) const;
+    void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
+                                const QString& source, quint64 traceId, quint64 sourceMs,
+                                std::chrono::steady_clock::time_point scheduledAt);
+    bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
+    void abortTxProducerInputs(const TxCoordinator::Producer& producer,
+                               TransmitModel::PttSource source);
     // Best-effort stop of this captured compatibility operation only. This is
     // not a cancellation/recovery acknowledgment or proof that RF has stopped.
     void requestTransmitStop(const TxCoordinator::Operation& operation);
+    // Explicit local operator override. Also discards pre-admission queued
+    // inputs; never exposed as another client's ordinary release operation.
+    void cancelLocalTransmit();
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     void sendCwKey(bool down, const QString& debugSource = {},
@@ -1814,6 +1838,7 @@ private:
     // the desktop methods. Per-client authority is a subsequent Stage 4 step;
     // no daemon client can register or obtain this actor.
     TxCoordinator m_txCoordinator;
+    std::shared_ptr<TxController> m_localTxController;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
     TxCoordinator::Producer m_backendTxProducer;
@@ -1824,6 +1849,7 @@ private:
     unsigned m_txOperationActivities{0}; // includes radio-buffered tails after local handoff
     unsigned m_pendingTxDeliveries{0};
     bool m_txSessionClosing{false};
+    bool m_txInputsStopping{false};
     quint64 m_txCommandEpoch{0};
     quint64 m_tuneCommandEpoch{0};
     quint64 m_atuCommandEpoch{0};
@@ -1845,6 +1871,8 @@ private:
                          const TxCoordinator::Request* request, bool alreadyClosing = false);
     void endLocalTxActivity(const TxCoordinator::Intent& intent);
     unsigned activeTxActivities() const;
+    bool hasOtherPttHolds(const TxCoordinator::Operation& operation,
+                          const TxCoordinator::Intent& excluded) const;
     void completeLocalTxIfDrained();
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
@@ -1883,7 +1911,8 @@ private:
     bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
                           quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                           std::chrono::steady_clock::time_point scheduledAt = {},
-                          std::function<void()> delivered = {});
+                          std::function<void()> delivered = {},
+                          const TxCoordinator::Operation* captured = nullptr);
     QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
@@ -1966,6 +1995,7 @@ private:
     bool        m_cwKeyActive{false}; // true while CW key/paddle is held (#1379)
     bool        m_cwxActive{false};   // true while CWX send is in flight (#2047, #2097)
     bool        m_cwPaddleHeld{false}; // true while a paddle is physically held (#5422)
+    std::vector<TxCoordinator::Request> m_producerCwPaddleInputs;
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
@@ -2112,7 +2142,13 @@ private:
     // Apply the same capability + receive-only-pan preflight to a non-Flex CW
     // carrier edge before it crosses the backend seam. Key-up always passes so
     // an inhibit arriving mid-element can never strand RF on.
-    bool forwardNonFlexCwKeying(bool down);
+    bool forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
+                                const TxCoordinator::Completion& completion);
+    bool sendCwInput(bool down, bool ptt, bool notifySidetone,
+                     const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                     std::chrono::steady_clock::time_point scheduledAt,
+                     const TxCoordinator::Request* request = nullptr);
+    quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
@@ -2222,6 +2258,8 @@ private:
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
     bool        m_wsprTxOwnershipRequested{false};
+    TxCoordinator::Request m_wsprTxInput;
+    bool        m_wsprTxTransition{false};
     bool        m_wsprTxYieldAfterUse{false};
     bool        m_wsprTxReleaseWhenReady{false};
     bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed

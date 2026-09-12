@@ -3,6 +3,8 @@
 #include "TestSettingsProfile.h"
 #include "TxTestAuthority.h"
 #include "models/RadioModel.h"
+#include "models/TxController.h"
+#include "core/SerialPortController.h"
 #include "models/SliceModel.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/ClientQuindarTone.h"
@@ -28,6 +30,11 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class TxOperationIntegrationTestAccess {
 public:
+    static void serialPtt(SerialPortController& source, bool down, const TxCoordinator::Request& input = {})
+    {
+        source.publishPttInput(down, input);
+    }
+    static void serialClose(SerialPortController& source) { source.retireTxInputs(); }
 #ifdef HAVE_WEBSOCKETS
     static void addTciClient(TciServer& server, QWebSocket& socket, RadioModel& radio)
     {
@@ -199,6 +206,59 @@ struct Fixture {
         commands.clear();
     }
 };
+
+void scopedWsprRoutes()
+{
+    Fixture f;
+    f.backend->caps.takesTxAudioOverSeam = true;
+    const auto producer = f.radio.registerTxProducer();
+    const auto first = producer.request();
+    const auto replacement = producer.request();
+    TxCoordinator foreign({});
+    const auto foreignProducer = foreign.registerProducer();
+    check(!f.radio.prepareWsprTransmit(foreignProducer.request()),
+          "another engine's input cannot borrow this radio's WSPR route");
+    check(f.radio.prepareWsprTransmit(first) && f.radio.hasWsprTxStream(),
+          "original WSPR program can prepare its seam audio route");
+    check(!f.radio.prepareWsprTransmit(replacement), "another WSPR program cannot overwrite a borrowed route");
+    f.radio.releaseWsprTransmit(replacement);
+    check(f.radio.hasWsprTxStream(), "foreign WSPR cleanup leaves the original route armed");
+    f.radio.releaseWsprTransmit(first);
+    check(f.radio.prepareWsprTransmit(replacement), "replacement WSPR program can arm after original release");
+    f.radio.releaseWsprTransmit(first);
+    check(f.radio.hasWsprTxStream(), "late original WSPR release cannot unarm replacement");
+    producer.discardInputs();
+    f.radio.releaseWsprTransmit(replacement);
+    check(!f.radio.hasWsprTxStream(), "cancelled WSPR input retains only its own route cleanup");
+    check(!f.radio.prepareWsprTransmit(replacement), "cancelled WSPR input cannot re-arm the route");
+}
+
+void cwxCallbackLifetimes()
+{
+    for (int stage = 0; stage < 4; ++stage) {
+        auto model = std::make_unique<CwxModel>();
+        const QPointer<CwxModel> original(model.get());
+        if (stage == 0) {
+            model->setTransmissionAdmission([&] {
+                model.reset();
+                return CwxModel::TransmissionPermit([] { return true; });
+            });
+        } else if (stage == 1 || stage == 3) {
+            QObject::connect(model.get(), &CwxModel::commandReady, [&] { model.reset(); });
+        } else {
+            model->setTextSender([&](const QString&, int) { model.reset(); return true; });
+        }
+        if (stage == 3) { original->clearBuffer(); }
+        else { original->send(QStringLiteral("+CQ TEST")); }
+        check(!model, "CW admission, speed dispatch, text delivery and clear tolerate owner destruction");
+    }
+    auto fixture = std::make_unique<Fixture>();
+    fixture->radio.transmitModel().setTxModeGetter([] { return QStringLiteral("CW"); });
+    const auto producer = fixture->radio.registerTxProducer();
+    const auto input = producer.request();
+    fixture->radio.requestProducerCwx(input, QStringLiteral("CQ"), [&] { fixture.reset(); });
+    check(!fixture && !input.valid(), "CW admitted callback may tear down the aggregate without later model access");
+}
 
 void perIntentCompletion()
 {
@@ -721,8 +781,11 @@ void queuedCwxCancellation()
     {
         Fixture f;
         TxCoordinator::Operation queued;
-        f.backend->cwTextWriter = [&queued](const TxCoordinator::Operation& operation) {
+        TxCoordinator::Completion completion;
+        f.backend->cwTextQueueWriter = [&](bool, const TxCoordinator::Operation& operation,
+                                           const TxCoordinator::Completion& delivered) {
             queued = operation;
+            completion = delivered;
         };
         f.radio.setTransmit(true);
         const TxCoordinator::Operation mox = f.radio.transmitOperation();
@@ -733,6 +796,7 @@ void queuedCwxCancellation()
         check(!queued.permitsDispatch(TxCoordinator::monotonicMs())
                   && mox.permitsDispatch(TxCoordinator::monotonicMs()),
               "typed backend CW cancellation is independent of a held MOX operation");
+        completion.finish();
     }
     for (int scenario = 0; scenario != 3; ++scenario) {
         QStringList tcp;
@@ -1088,6 +1152,192 @@ void scopedCompatibilityStop()
     check(f.commands.isEmpty(), "stale and empty stop handles cannot affect replacement TX");
 }
 
+void operatorCancelsCapturedInputs()
+{
+    Fixture f;
+    const auto first = std::make_shared<TxController>(&f.radio);
+    const auto second = std::make_shared<TxController>(&f.radio);
+    const TxController::Input queued = second->capture(TxController::Activity::Tune);
+    const TxController::Input mox = first->capture(TxController::Activity::Mox);
+    check(mox.start(), "operator-cancel fixture admits scoped MOX");
+    const TxController::Input other = second->capture(TxController::Activity::Mox);
+    check(other.start(), "operator-cancel fixture admits another compatible producer");
+    const TxCoordinator::Operation original = f.radio.transmitOperation();
+    bool nestedAccepted = false;
+    f.backend->keyingWriter = [&](bool on, const TxCoordinator::Operation&, const TxCoordinator::Completion&) {
+        if (!on) {
+            nestedAccepted = f.radio.localTxController()->capture(TxController::Activity::Mox).start();
+        }
+    };
+    f.commands.clear();
+    f.radio.cancelLocalTransmit();
+    f.backend->keyingWriter = {};
+    check(!nestedAccepted && f.commands.contains("mox:off") && !f.commands.contains("mox:on"),
+          "operator cancel unkeys all scoped contributors before reentrant admission");
+    check(!mox.valid() && !other.valid() && !queued.start()
+              && !original.permitsDispatch(TxCoordinator::monotonicMs()),
+          "operator cancel fences both admitted contributions and unadmitted queued inputs");
+    const TxController::Input fresh = f.radio.localTxController()->capture(TxController::Activity::Mox);
+    check(fresh.start(), "fresh operator intent may reengage after the local stop returns");
+    f.commands.clear();
+    mox.stop();
+    other.stop();
+    f.radio.requestTransmitStop(original);
+    check(f.commands.isEmpty() && fresh.valid(), "old release callbacks cannot unkey fresh operator intent");
+    fresh.stop();
+
+    const auto idle = std::make_shared<TxController>(&f.radio);
+    const TxController::Input pending = idle->capture(TxController::Activity::Mox);
+    f.radio.cancelLocalTransmit();
+    check(!pending.start(), "cancel while idle also discards pre-admission captured input");
+}
+
+void derivedInputsStayWithTheirProducer()
+{
+    Fixture f;
+    const auto controller = std::make_shared<TxController>(&f.radio);
+    const TxCoordinator::Request input = controller->capture(TxController::Activity::CwKey).request();
+    const TxCoordinator::Request element = input.derive();
+    check(element.valid() && !element.derive().valid(), "sequencer inputs have one bounded derivation level");
+    check(f.radio.requestProducerCw(element, true) && controller->hasWork(),
+          "derived CW admission remains visible to its original controller");
+    const TxCoordinator::Context media = f.radio.captureTxMedia(element);
+    f.commands.clear();
+    controller->invalidate();
+    check(f.commands.contains("cw:off") && !media.permitsDispatch(TxCoordinator::monotonicMs())
+              && !input.derive().valid(),
+          "producer invalidation unkeys its derived element and fences future elements");
+    const auto fresh = std::make_shared<TxController>(&f.radio);
+    const TxCoordinator::Request pending = fresh->capture(TxController::Activity::CwKey).request();
+    const TxCoordinator::Request queued = pending.derive();
+    f.radio.cancelLocalTransmit();
+    f.commands.clear();
+    check(!f.radio.requestProducerCw(queued, true) && f.commands.isEmpty(),
+          "cancelled parent input cannot admit its previously derived queued element");
+}
+
+void queuedDerivedCwElements()
+{
+    QStringList tcp;
+    RadioConnection connection;
+    Fixture f;
+    TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+    const TxCoordinator::Request input = f.radio.registerTxProducer().request();
+    for (int i = 0; i != 2; ++i) {
+        const TxCoordinator::Request element = input.derive();
+        check(f.radio.requestProducerCw(element, true), "queued sequencer element admits its original request");
+        (void)f.radio.requestProducerCw(element, false);
+    }
+    QEventLoop loop;
+    QTimer::singleShot(60, &loop, &QEventLoop::quit);
+    loop.exec();
+    check(tcp.filter("cw key immediate 1").size() == 2 && tcp.filter("cw key immediate 0").size() == 2,
+          "two normally released derived elements retain both queued down/up pairs");
+}
+
+void deviceCloseFencesOriginalInputs()
+{
+    Fixture f;
+    const TxCoordinator::Producer device = f.radio.registerTxProducer();
+    const TxCoordinator::Request queued = device.request();
+    const TxCoordinator::Request held = device.request();
+    check(f.radio.setProducerTransmit(held, true), "device input is admitted before close");
+    const TxCoordinator::Context original = f.radio.captureTxMedia(held);
+    device.discardInputs();
+    check(device.valid() && !held.valid() && !queued.valid()
+              && !original.permitsDispatch(TxCoordinator::monotonicMs()),
+          "device close fences every captured input and media without destroying the reusable producer");
+    f.radio.abortTxProducerInputs(device, TransmitModel::PttSource::Mox);
+    check(f.commands.last() == "mox:off", "device close still releases original admitted PTT");
+    const TxCoordinator::Request fresh = device.request();
+    check(f.radio.setProducerTransmit(fresh, true), "fresh raw device input can start after close cleanup");
+    f.commands.clear();
+    (void)f.radio.setProducerTransmit(held, false);
+    check(f.commands.isEmpty(), "old device key-up cannot stop a replacement input");
+    f.radio.setProducerTransmit(fresh, false);
+}
+
+void compoundAndDeviceControllerScopes()
+{
+    Fixture f;
+    const auto source = std::make_shared<TxController>(&f.radio);
+    const auto held = source->capture(TxController::Activity::Mox);
+    check(held.start(), "source hold starts before a compound pointer input");
+    const auto abandoned = TxController::captureInputScope(source);
+    check(abandoned && abandoned->sameController(source), "compound view retains its source identity");
+    abandoned->invalidate();
+    check(held.active() && held.valid(), "abandoned compound input cannot cancel an earlier source hold");
+    held.stop();
+
+    TxController::Input queued;
+    {
+        const auto scope = TxController::captureInputScope(source);
+        queued = scope->capture(TxController::Activity::Mox);
+    }
+    check(queued.start(), "normal input-view destruction retains an admitted queued action");
+    queued.stop();
+    const auto cancelled = TxController::captureInputScope(source);
+    f.radio.cancelLocalTransmit();
+    check(!cancelled->capture(TxController::Activity::Mox).valid(),
+          "second compound activation cannot remint after operator cancellation");
+
+    QObject device;
+    const auto native = TxController::forNativeDevice(&f.radio, &device);
+    check(!native->capture(TxController::Activity::Mox).valid()
+              && !TxController::captureInputScope(native),
+          "device cannot capture authority at callback time without original raw input");
+    const auto raw = native->captureRawInput();
+    native->discardDeviceInputs();
+    const auto stale = TxController::captureInputScope(native, raw);
+    check(stale && !stale->capture(TxController::Activity::Mox).valid(),
+          "device close before queued delivery rejects the old raw input");
+    const auto fresh = TxController::captureInputScope(native, native->captureRawInput());
+    const auto replacement = fresh->capture(TxController::Activity::Mox);
+    check(replacement.start(), "new raw device input starts after close");
+    stale->current(TxController::Activity::Mox).stop();
+    check(replacement.active(), "old device epoch release cannot consume replacement hold");
+    const auto foreign = std::make_shared<TxController>(&f.radio);
+    check(!TxController::captureInputScope(foreign, native->captureRawInput()),
+          "a raw input cannot be relabeled as a different controller");
+    native->discardDeviceInputs();
+    native->cleanupDeviceInputs();
+    check(!replacement.active(), "device close cleans only original producer work");
+}
+
+void serialInputQueueLifetimes()
+{
+    Fixture f;
+    SerialPortController source;
+    const TxCoordinator::Producer producer = f.radio.registerTxProducer(&source);
+    source.setTxProducer(producer);
+    QObject::connect(&source, &SerialPortController::externalPttChanged, &f.radio,
+        [&](bool down, const TxCoordinator::Request& input) {
+            (void)f.radio.setProducerTransmit(input, down, TransmitModel::PttSource::Mox);
+        }, Qt::QueuedConnection);
+    QObject::connect(&source, &SerialPortController::txInputsCancelled, &f.radio, [&] {
+        f.radio.abortTxProducerInputs(producer, TransmitModel::PttSource::Mox);
+    }, Qt::QueuedConnection);
+    const auto drain = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall); };
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    TxOperationIntegrationTestAccess::serialClose(source);
+    drain();
+    check(f.commands.isEmpty(), "serial close before queued delivery cannot admit an old press");
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    drain();
+    check(f.commands.contains("mox:on"), "fresh serial input after device close captures a new request");
+    TxOperationIntegrationTestAccess::serialPtt(source, false);
+    drain();
+    check(f.commands.last() == "mox:off", "serial key-up releases its original input across the queue");
+
+    TxOperationIntegrationTestAccess::serialPtt(source, true, producer.request());
+    f.radio.forceDisconnect();
+    auto replacement = std::make_unique<RecordingBackend>(f.commands);
+    f.radio.setBackendForTest(std::move(replacement), QStringLiteral("test"));
+    f.commands.clear();
+    drain();
+    check(f.commands.isEmpty(), "serial press captured before reconnect cannot acquire in replacement session");
+}
+
 // Both test-injection entry points tear the old backend down, which closes
 // admission for the dying session. Neither is followed by an onConnected()
 // edge, so each has to drain the latch itself or every later TX intent in that
@@ -1281,6 +1531,67 @@ void producerCwxQueue()
     completion.finish();
 }
 
+void nativeCwxUsesOperatorProducer()
+{
+    Fixture f;
+    TxCoordinator::Operation queued;
+    TxCoordinator::Completion completion;
+    f.backend->cwTextQueueWriter = [&](bool, const auto& operation, const auto& done) {
+        queued = operation;
+        completion = done;
+    };
+    const auto controller = f.radio.localTxController();
+    f.radio.cwxModel().send(QStringLiteral("CQ"));
+    check(controller->hasWork() && queued.permitsDispatch(TxCoordinator::monotonicMs()),
+          "native CW text is captured by the shared operator producer before backend queues");
+    controller->invalidate();
+    check(f.commands.contains("cwx:abort") && !queued.permitsDispatch(TxCoordinator::monotonicMs()),
+          "operator producer teardown also fences native CW text and aborts its own queue");
+    completion.finish();
+}
+
+void cwQueueDoesNotOwnManualPtt()
+{
+    for (const bool scoped : {false, true}) {
+        Fixture f;
+        const auto controller = std::make_shared<TxController>(&f.radio);
+        const TxController::Input hold = controller->capture(TxController::Activity::Mox);
+        if (scoped) {
+            check(hold.start(), "scoped MOX is admitted before queued CW");
+        } else {
+            f.radio.setTransmit(true);
+        }
+        TxCoordinator::Operation text;
+        TxCoordinator::Completion pending;
+        f.backend->cwTextQueueWriter = [&](bool, const auto& operation, const auto& completion) {
+            text = operation;
+            pending = completion;
+        };
+        const TxCoordinator::Request cw = f.radio.registerTxProducer().request();
+        check(f.radio.requestProducerCwx(cw, QStringLiteral("CQ")), "independent CW text queues over manual MOX");
+        f.commands.clear();
+        if (scoped) {
+            hold.stop();
+        } else {
+            f.radio.setTransmit(false);
+        }
+        check(f.commands.contains("mox:off") && text.permitsDispatch(TxCoordinator::monotonicMs()),
+              "pending CW text cannot swallow manual MOX release or lose its own queue authority");
+        pending.finish();
+        check(!text.permitsDispatch(TxCoordinator::monotonicMs()), "CW handoff drains without leaving a manual PTT intent");
+    }
+    Fixture f;
+    f.radio.setTransmit(true);
+    const auto controller = std::make_shared<TxController>(&f.radio);
+    const TxController::Input hold = controller->capture(TxController::Activity::Mox);
+    check(hold.start(), "scoped MOX joins legacy operator MOX");
+    f.commands.clear();
+    f.radio.setTransmit(false);
+    check(f.commands.isEmpty() && hold.valid(), "ordinary legacy MOX release preserves another producer's hold");
+    hold.stop();
+    check(f.commands.contains("mox:off"), "last scoped MOX release reaches the backend");
+}
+
 void protocolCwxLifetimes()
 {
     const auto drain = [] {
@@ -1448,11 +1759,21 @@ int main(int argc, char** argv)
     queuedNetCwEdges();
     queuedCwSessionAndTcpFences();
     scopedCompatibilityStop();
+    operatorCancelsCapturedInputs();
+    derivedInputsStayWithTheirProducer();
+    queuedDerivedCwElements();
+    deviceCloseFencesOriginalInputs();
+    compoundAndDeviceControllerScopes();
+    scopedWsprRoutes();
+    cwxCallbackLifetimes();
+    serialInputQueueLifetimes();
     testInjectionReopensAdmission();
     protocolProducerLifetimes();
     producerNormalTails();
     producerTuneAndAtu();
     producerCwxQueue();
+    nativeCwxUsesOperatorProducer();
+    cwQueueDoesNotOwnManualPtt();
     protocolCwxLifetimes();
 #ifdef HAVE_WEBSOCKETS
     tciProducerLifetimes();

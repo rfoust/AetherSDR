@@ -7,6 +7,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace AetherSDR {
@@ -34,12 +35,18 @@ public:
         [[nodiscard]] bool valid() const;
         [[nodiscard]] bool sameProducer(const Producer& other) const;
         void invalidate() const; // atomic; callable by the producer's destructor
+        // A native device close discards queued/held input without destroying
+        // the device object. Only a later raw input may capture the new epoch.
+        void discardInputs() const;
         // Capture at the input boundary, before any queued hop. This does not
         // admit TX; only the owner can bind it to an already admitted operation.
         [[nodiscard]] Request request() const;
+        [[nodiscard]] bool ownsRequest(const Request& input) const;
     private:
         friend class TxCoordinator;
         friend class Context;
+        friend class Request;
+        [[nodiscard]] Request makeRequest(const std::shared_ptr<RequestState>& input) const;
         std::shared_ptr<ProducerState> m_state;
     };
     class Actor {
@@ -162,7 +169,17 @@ public:
     class Request {
     public:
         [[nodiscard]] bool valid() const;
+        // Cleanup bookkeeping only: ignores request/producer cancellation,
+        // but never survives a connection reset or coordinator destruction.
+        // This is NOT a transmit admission or dispatch permit.
+        [[nodiscard]] bool originalSessionCurrent() const;
         [[nodiscard]] bool sameRequest(const Request& other) const;
+        [[nodiscard]] bool derivedFrom(const Request& input) const;
+        [[nodiscard]] bool sameInputEpoch(const Request& other) const;
+        // A sequencer derives each element/frame from the original unbound
+        // input, never from the current connection at timer/output time.
+        // One derivation level only; all handles share the global bound.
+        [[nodiscard]] Request derive() const;
     private:
         friend class TxCoordinator;
         friend class Producer;
@@ -214,8 +231,14 @@ public:
 
     [[nodiscard]] Actor registerActor(ActorPolicy policy);
     [[nodiscard]] Producer registerProducer(bool continuousMicrophone = false);
+    [[nodiscard]] bool ownsRequest(const Request& request) const;
+    [[nodiscard]] std::vector<Request> producerRequests(const Producer& producer) const;
+    void setProducerAdmissionObserver(const Producer& producer, std::function<void()> observer);
+    void notifyProducerAdmission(const Request& request);
     [[nodiscard]] Context mediaContext(const Producer& producer, const Operation& operation = {}) const;
     [[nodiscard]] bool acceptsRequest(const Request& request) const;
+    [[nodiscard]] bool hasForeignIntents(const Operation& operation, const Request* request,
+                                         unsigned activities = 0) const;
     [[nodiscard]] Intent beginRequest(const Request& request, const Operation& operation, Activity activity);
     [[nodiscard]] Intent requestIntent(const Request& request) const;
     [[nodiscard]] Operation requestOperation(const Request& request) const;
@@ -224,7 +247,7 @@ public:
     // queued on. The original intent stays alive for its normal queued tail.
     [[nodiscard]] Intent closeRequest(const Request& request);
     [[nodiscard]] bool hasOtherIntents(const Operation& operation, const Intent& excluded,
-                                        unsigned activities = 0) const;
+                                        unsigned activities = 0, bool includeFinishing = true) const;
     [[nodiscard]] Admission acquire(const Actor& actor, qint64 monotonicMs);
     // Repeated admission by the same producer reuses its live handle; it does
     // not accumulate reference-counted holds. Distinct producers use distinct
@@ -244,6 +267,12 @@ public:
     // another operation (the transitional desktop compatibility workflow).
     // A bounded actor retains its original deadline across unconfirmed tails.
     [[nodiscard]] bool finishLocalIntent(const Operation& operation);
+    // Operator-level local stop: retire every contribution to this exact
+    // operation, retaining the same unconfirmed-actor barrier as normal end.
+    void finishLocalIntents(const Operation& operation);
+    // Fence inputs captured before an explicit operator cancel, including
+    // requests that have not reached admission. Producers themselves survive.
+    void discardCapturedRequests();
     // Cancellation invalidates queued work before the engine's immediate stop.
     [[nodiscard]] bool cancel(const Actor& actor, const Operation& operation);
     void revoke(const Actor& actor);
@@ -274,6 +303,7 @@ private:
         static constexpr quint64 kChangingGeneration = quint64{1} << 63;
         std::atomic<quint64> generation{0};
         std::atomic<quint64> session{0};
+        std::atomic<quint64> inputEpoch{0};
         std::atomic<quint64> dispatches{0};
         // RX microphone media cannot hold up a fresh PTT intent. Teardown,
         // unlike operation admission, must account for these writes too.
@@ -289,7 +319,11 @@ private:
     struct ProducerState {
         std::weak_ptr<Identity> coordinator;
         std::atomic<bool> valid{true};
+        std::atomic<quint64> inputEpoch{0};
         bool continuousMicrophone{false};
+        std::function<void()> admitted; // owner-thread only, never called by transport workers
+        std::mutex requestMutex; // input capture only, never audio dispatch
+        std::vector<std::weak_ptr<RequestState>> requests;
     };
     struct OperationState {
         std::shared_ptr<ActorState> actor;
@@ -306,6 +340,8 @@ private:
         std::shared_ptr<ProducerState> producer;
         Activity activity{Activity::Mox};
         std::atomic<bool> ended{false};
+        std::function<bool()> inputPermit; // immutable before worker publication
+        quint64 producerEpoch{0};
         bool finishing{false}; // owner-thread only; not the worker dispatch fence
     };
     struct RequestState {
@@ -313,6 +349,9 @@ private:
         std::shared_ptr<Identity> identity;
         Producer producer;
         quint64 session{0};
+        quint64 inputEpoch{0};
+        quint64 producerEpoch{0};
+        std::shared_ptr<RequestState> input;
         std::atomic<bool> closed{false};
         // Published once by the owner, then immutable. Readers acquire bound
         // before copying intent; no mutex/atomic-shared_ptr is needed on the
@@ -326,13 +365,15 @@ private:
     void stop(StopReason reason);
     void endIntents(const Operation& operation);
     [[nodiscard]] Intent beginIntent(const Operation& operation, const Intent& previous,
-                                      Activity activity, const std::shared_ptr<ProducerState>& producer);
+                                      Activity activity, const std::shared_ptr<ProducerState>& producer,
+                                      std::function<bool()> inputPermit = {}, quint64 producerEpoch = 0);
 
     QThread* const m_thread;
     std::shared_ptr<Identity> m_identity;
     std::vector<std::weak_ptr<ActorState>> m_actors;
     std::vector<std::weak_ptr<ProducerState>> m_producers;
     std::vector<std::shared_ptr<IntentState>> m_intents;
+    std::vector<Request> m_boundRequests; // retains admitted inputs through terminal cleanup
     Operation m_active;
     Operation m_unconfirmed;
     Operation m_stopping;
@@ -343,3 +384,4 @@ private:
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::TxCoordinator::Context)
+Q_DECLARE_METATYPE(AetherSDR::TxCoordinator::Request)

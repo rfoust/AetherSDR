@@ -1,8 +1,11 @@
 #include "TestSettingsProfile.h"
 #include "core/backends/TransmitDelta.h"
+#include "core/TxKeyingMarker.h"
+#include "gui/AtuPreTuneDialog.h"
 #include "gui/HGauge.h"
 #include "gui/TxApplet.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
 #include <QAction>
@@ -14,11 +17,39 @@
 #include <QSignalSpy>
 #include <QPushButton>
 #include <QSlider>
+#include <QTimer>
 
 #include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace AetherSDR {
+
+class TxAppletPowerReconciliationTestAccess {
+public:
+    static TxController::Input prepareSweep(AtuPreTuneDialog& dialog,
+                                            const std::shared_ptr<TxController>& controller)
+    {
+        dialog.m_programController = controller;
+        dialog.m_programInput = controller->captureProgram(TxController::Activity::Atu);
+        dialog.m_sweepActive = true;
+        dialog.m_currentIndex = 0;
+        dialog.m_points = {{QStringLiteral("20m"), 14.100, 1, 1, 14.0, 14.35}};
+        dialog.m_tuneBtn->setEnabled(true);
+        dialog.requestTuneNow();
+        return dialog.m_programInput;
+    }
+    static void settle(AtuPreTuneDialog& dialog)
+    {
+        dialog.m_settleTimer->stop();
+        QMetaObject::invokeMethod(dialog.m_settleTimer, "timeout", Qt::DirectConnection);
+    }
+    static void cancel(AtuPreTuneDialog& dialog) { dialog.cancelProgram(); }
+    static QPushButton* tune(AtuPreTuneDialog& dialog) { return dialog.m_tuneBtn; }
+};
+
+} // namespace AetherSDR
 
 namespace {
 
@@ -243,6 +274,227 @@ void testAtuSuccessTogglesToBypass()
     report("bypassed ATU click starts a fresh tune",
            !commandSpy.isEmpty()
                && commandSpy.takeLast().at(0).toBool());
+}
+
+// Inject the production backend seam, not a firmware peer. No sockets or RF.
+class TxActionBackend final : public IRadioBackend {
+public:
+    QStringList commands;
+    bool connected{false};
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps;
+        caps.canTransmit = true;
+        caps.hasTuner = true;
+        return caps;
+    }
+    bool isConnected() const override { return connected; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool on, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override
+    { commands << (on ? "mox:on" : "mox:off"); }
+    void setAtu(bool on, const TxCoordinator::Operation&, const TxCoordinator::Completion&) override
+    { commands << (on ? "atu:on" : "atu:off"); }
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
+
+void testScopedControllerActions()
+{
+    RadioModel radio;
+    auto backend = std::make_unique<TxActionBackend>();
+    TxActionBackend* recorder = backend.get();
+    radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+    const bool sliceReady = radio.automationApplySliceFixture(0, QStringLiteral("A"));
+    report("scoped control disconnected slice fixture", sliceReady);
+    if (!sliceReady) {
+        return;
+    }
+    SliceDelta slice;
+    slice.txSlice = true;
+    slice.mode = QStringLiteral("USB");
+    slice.panId = QStringLiteral("0x40000000");
+    radio.slice(0)->applyChanges(slice);
+    recorder->connected = true;
+    radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
+
+    TxApplet applet;
+    applet.setRadioModel(&radio);
+    applet.setTransmitModel(&radio.transmitModel());
+    QWidget* mox = namedWidget(applet, QStringLiteral("MOX transmit"));
+    QWidget* atu = namedWidget(applet, QStringLiteral("ATU tune"));
+    report("scoped applet controls exist", mox && atu);
+    if (!mox || !atu) {
+        return;
+    }
+    const auto bridge = std::make_shared<TxController>(&radio);
+    TxKeyingAction::Prepared action = prepareTxKeyingAction(mox, bridge, "setChecked", "true");
+    report("MOX supplies a prepared producer action", bool(action));
+    if (!action) {
+        return;
+    }
+    recorder->commands.clear();
+    bridge->invalidate();
+    action();
+    report("revoked prepared UI action never keys", recorder->commands.isEmpty());
+
+    const auto controller = std::make_shared<TxController>(&radio);
+    action = prepareTxKeyingAction(atu, controller, "click", {});
+    report("ATU supplies a prepared producer action", bool(action));
+    if (!action) {
+        return;
+    }
+    action();
+    report("prepared ATU action starts actual model request", recorder->commands.contains("atu:on"));
+    TransmitDelta matched;
+    matched.transmitFreq = 14.100;
+    matched.atuEnabled = true;
+    matched.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+    radio.transmitModel().applyChanges(matched);
+    recorder->commands.clear();
+    action = prepareTxKeyingAction(atu, controller, "click", {});
+    if (action) {
+        action();
+    }
+    report("scoped ATU preserves same-frequency bypass logic", recorder->commands == QStringList{"atu:off"});
+    TransmitDelta moved;
+    moved.transmitFreq = 14.200;
+    radio.transmitModel().applyChanges(moved);
+    recorder->commands.clear();
+    action = prepareTxKeyingAction(atu, controller, "click", {});
+    if (action) {
+        action();
+    }
+    report("scoped ATU retunes after a frequency change", recorder->commands == QStringList{"atu:on"});
+    controller->invalidate();
+
+    const auto operatorInput = std::make_shared<TxController>(&radio);
+    (void)operatorInput->capture(TxController::Activity::Mox).start();
+    const auto observer = std::make_shared<TxController>(&radio);
+    action = prepareTxKeyingAction(mox, observer, "setChecked", "false");
+    recorder->commands.clear();
+    if (action) {
+        action();
+    }
+    report("UI release cannot consume another controller's MOX", recorder->commands.isEmpty()
+           && radio.transmitModel().isTransmitting());
+    RadioModel other;
+    const auto foreign = std::make_shared<TxController>(&other);
+    report("scoped action rejects a different radio model",
+           !prepareTxKeyingAction(mox, foreign, "click", {}));
+}
+
+void testScopedPointerActivation()
+{
+    RadioModel radio;
+    auto backend = std::make_unique<TxActionBackend>();
+    TxActionBackend* recorder = backend.get();
+    radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+    report("pointer test slice fixture", radio.automationApplySliceFixture(0, QStringLiteral("A")));
+    if (!radio.slice(0)) { return; }
+    SliceDelta delta;
+    delta.txSlice = true;
+    delta.mode = QStringLiteral("USB");
+    radio.slice(0)->applyChanges(delta);
+    recorder->connected = true;
+    radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
+    const auto controller = std::make_shared<TxController>(&radio);
+    QPushButton button(QStringLiteral("Transmit"));
+    button.resize(160, 30);
+    int preparations = 0;
+    registerTxKeyingAction(&button, [&](const std::shared_ptr<TxController>& source,
+        const QString&, const QString&) -> TxKeyingAction::Prepared {
+        ++preparations;
+        const auto input = source->capture(TxController::Activity::Mox);
+        return [&, input] {
+            if (radio.transmitModel().isTransmitting()) { input.stop(); }
+            else { (void)input.start(); }
+        };
+    });
+    const QPoint inside = button.mapToGlobal(button.rect().center());
+    const QPoint outside = button.mapToGlobal(QPoint(-20, -20));
+    auto pointer = TxPointerAction::prepare(&button, controller);
+    report("pointer action prepares", bool(pointer));
+    if (!pointer) { return; }
+    pointer->press(inside);
+    report("TX pointer press changes down state but never keys", button.isDown() && recorder->commands.isEmpty());
+    pointer->cancel();
+    report("TX gesture cancel never activates a button", !button.isDown() && recorder->commands.isEmpty());
+    pointer = TxPointerAction::prepare(&button, controller);
+    pointer->press(inside);
+    pointer->release(outside);
+    report("release outside does not key", recorder->commands.isEmpty());
+    pointer = TxPointerAction::prepare(&button, controller);
+    pointer->press(inside);
+    pointer->release(inside);
+    report("release inside invokes original controller action", recorder->commands.contains("mox:on"));
+    const auto compound = pointer->controller();
+    pointer.reset();
+    report("released pointer destruction preserves its hold", radio.transmitModel().isTransmitting());
+    pointer = TxPointerAction::prepare(&button, compound);
+    pointer->press(inside);
+    pointer->release(inside);
+    report("second click reads updated toggle state under same input", recorder->commands.last() == "mox:off");
+    radio.cancelLocalTransmit();
+    report("cancelled compound gesture cannot prepare another activation", !TxPointerAction::prepare(&button, compound));
+    report("every activation captured at preparation", preparations == 4);
+}
+
+void testSweepRetainsOriginalAuthority()
+{
+    RadioModel radio;
+    auto backend = std::make_unique<TxActionBackend>();
+    TxActionBackend* recorder = backend.get();
+    radio.setBackendForTest(std::move(backend), QStringLiteral("test"));
+    recorder->connected = true;
+    radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
+    AtuPreTuneDialog dialog(&radio, nullptr);
+    const auto controller = std::make_shared<TxController>(&radio);
+    const auto stranger = std::make_shared<TxController>(&radio);
+    const TxController::Input root =
+        TxAppletPowerReconciliationTestAccess::prepareSweep(dialog, controller);
+    report("sweep continuation rejects another controller",
+           !prepareTxKeyingAction(TxAppletPowerReconciliationTestAccess::tune(dialog),
+                                 stranger, "click", {}));
+    TxKeyingAction::Prepared continuation = prepareTxKeyingAction(
+        TxAppletPowerReconciliationTestAccess::tune(dialog), controller, "click", {});
+    report("sweep continuation captures the original program", bool(continuation));
+    recorder->commands.clear();
+    controller->invalidate();
+    TxAppletPowerReconciliationTestAccess::settle(dialog);
+    if (continuation) { continuation(); }
+    report("revoked sweep cannot key after its settling delay", recorder->commands.isEmpty());
+
+    const auto replacement = std::make_shared<TxController>(&radio);
+    const TxController::Input currentRoot =
+        TxAppletPowerReconciliationTestAccess::prepareSweep(dialog, replacement);
+    TxAppletPowerReconciliationTestAccess::settle(dialog);
+    report("fresh sweep starts its own scoped ATU point", recorder->commands == QStringList{"atu:on"});
+    report("point admission does not consume the original sequence input", currentRoot.valid());
+    recorder->commands.clear();
+    root.stop();
+    report("old sweep cancellation cannot stop replacement ATU", recorder->commands.isEmpty());
+    TxAppletPowerReconciliationTestAccess::cancel(dialog);
+    report("sweep abort stops its point and closes future derivation",
+           recorder->commands == QStringList{"atu:off"} && !currentRoot.derive().valid());
+
+    const TxController::Input manual = stranger->capture(TxController::Activity::Atu);
+    report("manual ATU can start after sweep cleanup", manual.start());
+    recorder->commands.clear();
+    TxAppletPowerReconciliationTestAccess::cancel(dialog);
+    report("repeated sweep cleanup cannot stop unrelated manual ATU", recorder->commands.isEmpty());
+    manual.stop();
+
+    const auto delayed = std::make_shared<TxController>(&radio);
+    (void)TxAppletPowerReconciliationTestAccess::prepareSweep(dialog, delayed);
+    radio.cancelLocalTransmit();
+    recorder->commands.clear();
+    TxAppletPowerReconciliationTestAccess::settle(dialog);
+    report("operator cancellation fences an ATU point not admitted yet", recorder->commands.isEmpty());
 }
 
 void testAtuCapabilityUsesThreeVisibleStates()
@@ -496,6 +748,9 @@ int main(int argc, char** argv)
     testCapabilityPowerScaleHonoursBandCeiling();
     testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
+    testScopedControllerActions();
+    testScopedPointerActivation();
+    testSweepRetainsOriginalAuthority();
     testAtuCapabilityUsesThreeVisibleStates();
     testTuneAvailability();
     testAtuContextMenuExplainsWhyPreTuneIsDisabled();

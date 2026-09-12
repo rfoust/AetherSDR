@@ -50,7 +50,9 @@ bool TxCoordinator::Operation::permitsDispatch(qint64 now) const
 {
     if (!m_state || m_state->cancelled.load(std::memory_order_acquire)
         || (m_producer && !m_producer->valid.load(std::memory_order_acquire))
-        || (m_intent && m_intent->ended.load(std::memory_order_acquire))
+        || (m_intent && (m_intent->ended.load(std::memory_order_acquire)
+            || (m_intent->producer && m_intent->producerEpoch != m_intent->producer->inputEpoch.load(std::memory_order_acquire))
+            || (m_intent->inputPermit && !m_intent->inputPermit())))
         || (m_keyingPermit && !(*m_keyingPermit)())
         || now < m_state->startedMs) {
         return false;
@@ -105,7 +107,9 @@ TxCoordinator::Operation TxCoordinator::Operation::heldKeying() const
             const std::shared_ptr<IntentState> intent = entry.lock();
             if (intent && (intent->activity == Activity::Mox || intent->activity == Activity::CwPtt)
                 && !intent->ended.load(std::memory_order_acquire)
-                && (!intent->producer || intent->producer->valid.load(std::memory_order_acquire))) {
+                && (!intent->producer || intent->producer->valid.load(std::memory_order_acquire))
+                && (!intent->producer || intent->producerEpoch == intent->producer->inputEpoch.load(std::memory_order_acquire))
+                && (!intent->inputPermit || intent->inputPermit())) {
                 return true;
             }
         }
@@ -157,7 +161,10 @@ bool TxCoordinator::Intent::pending() const
 
 bool TxCoordinator::Intent::permitsDispatch(qint64 now) const
 {
-    return pending() && m_state->operation.permitsDispatch(now);
+    return pending() && m_state->operation.permitsDispatch(now)
+        && (!m_state->producer || (m_state->producer->valid.load(std::memory_order_acquire)
+            && m_state->producerEpoch == m_state->producer->inputEpoch.load(std::memory_order_acquire)))
+        && (!m_state->inputPermit || m_state->inputPermit());
 }
 
 bool TxCoordinator::Intent::sameIntent(const Intent& other) const
@@ -191,7 +198,32 @@ void TxCoordinator::Producer::invalidate() const
     }
 }
 
+void TxCoordinator::Producer::discardInputs() const
+{
+    if (m_state) {
+        m_state->inputEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
+}
+
 TxCoordinator::Request TxCoordinator::Producer::request() const
+{
+    return makeRequest({});
+}
+
+bool TxCoordinator::Producer::ownsRequest(const Request& input) const
+{
+    return input.m_state && sameProducer(input.m_state->producer);
+}
+
+bool TxCoordinator::Request::sameInputEpoch(const Request& other) const
+{
+    return m_state && other.m_state && m_state->producer.sameProducer(other.m_state->producer)
+        && m_state->session == other.m_state->session
+        && m_state->inputEpoch == other.m_state->inputEpoch
+        && m_state->producerEpoch == other.m_state->producerEpoch;
+}
+
+TxCoordinator::Request TxCoordinator::Producer::makeRequest(const std::shared_ptr<RequestState>& input) const
 {
     if (!valid()) {
         return {};
@@ -201,6 +233,8 @@ TxCoordinator::Request TxCoordinator::Producer::request() const
         return {};
     }
     const quint64 session = identity->session.load(std::memory_order_acquire);
+    const quint64 inputEpoch = identity->inputEpoch.load(std::memory_order_acquire);
+    const quint64 producerEpoch = m_state->inputEpoch.load(std::memory_order_acquire);
     int count = identity->requests.load(std::memory_order_acquire);
     do {
         if (count >= kMaximumRequests) {
@@ -212,6 +246,14 @@ TxCoordinator::Request TxCoordinator::Producer::request() const
     request.m_state->identity = identity;
     request.m_state->producer = *this;
     request.m_state->session = session;
+    request.m_state->inputEpoch = inputEpoch;
+    request.m_state->producerEpoch = producerEpoch;
+    request.m_state->input = input;
+    {
+        std::lock_guard<std::mutex> lock(m_state->requestMutex);
+        std::erase_if(m_state->requests, [](const auto& weak) { return weak.expired(); });
+        m_state->requests.push_back(request.m_state);
+    }
     return request;
 }
 
@@ -219,18 +261,46 @@ bool TxCoordinator::Request::valid() const
 {
     if (!m_state || m_state->closed.load(std::memory_order_acquire)
         || !m_state->producer.valid()
-        || m_state->session != m_state->identity->session.load(std::memory_order_acquire)) {
+        || m_state->producerEpoch != m_state->producer.m_state->inputEpoch.load(std::memory_order_acquire)
+        || m_state->session != m_state->identity->session.load(std::memory_order_acquire)
+        || m_state->inputEpoch != m_state->identity->inputEpoch.load(std::memory_order_acquire)) {
         return false;
     }
     const std::shared_ptr<IntentState> intent = m_state->bound.load(std::memory_order_acquire)
         ? m_state->intent : nullptr;
+    if (m_state->input) {
+        Request input;
+        input.m_state = m_state->input;
+        if (!input.valid()) {
+            return false;
+        }
+    }
     return !intent || (!intent->ended.load(std::memory_order_acquire)
         && intent->operation.permitsDispatch(monotonicMs()));
+}
+
+bool TxCoordinator::Request::originalSessionCurrent() const
+{
+    return m_state && m_state->identity->alive.load(std::memory_order_acquire)
+        && m_state->session == m_state->identity->session.load(std::memory_order_acquire);
+}
+
+bool TxCoordinator::Request::derivedFrom(const Request& input) const
+{
+    return m_state && input.m_state && m_state->input == input.m_state;
 }
 
 bool TxCoordinator::Request::sameRequest(const Request& other) const
 {
     return m_state && m_state == other.m_state;
+}
+
+TxCoordinator::Request TxCoordinator::Request::derive() const
+{
+    if (!valid() || m_state->input || m_state->bound.load(std::memory_order_acquire)) {
+        return {};
+    }
+    return m_state->producer.makeRequest(m_state);
 }
 
 bool TxCoordinator::Context::permitsDispatch(qint64 now) const
@@ -281,6 +351,7 @@ TxCoordinator::TxCoordinator(StopHandler stopHandler)
     , m_stopHandler(std::move(stopHandler))
 {
     qRegisterMetaType<Context>();
+    qRegisterMetaType<Request>();
 }
 
 TxCoordinator::~TxCoordinator()
@@ -355,6 +426,56 @@ bool TxCoordinator::acceptsRequest(const Request& request) const
     return onThread() && request.valid() && request.m_state->identity == m_identity;
 }
 
+std::vector<TxCoordinator::Request> TxCoordinator::producerRequests(const Producer& producer) const
+{
+    std::vector<Request> requests;
+    if (!onThread() || !producer.m_state || producer.m_state->coordinator.lock() != m_identity) {
+        return requests;
+    }
+    std::lock_guard<std::mutex> lock(producer.m_state->requestMutex);
+    for (const auto& weak : producer.m_state->requests) {
+        Request request;
+        request.m_state = weak.lock();
+        if (request.m_state) {
+            requests.push_back(std::move(request));
+        }
+    }
+    return requests;
+}
+
+void TxCoordinator::setProducerAdmissionObserver(const Producer& producer, std::function<void()> observer)
+{
+    if (onThread() && producer.m_state && producer.m_state->coordinator.lock() == m_identity) {
+        producer.m_state->admitted = std::move(observer);
+    }
+}
+
+void TxCoordinator::notifyProducerAdmission(const Request& request)
+{
+    if (acceptsRequest(request) && requestIntent(request).pending()) {
+        const std::function<void()> observer = request.m_state->producer.m_state->admitted;
+        if (observer) {
+            observer();
+        }
+    }
+}
+
+bool TxCoordinator::hasForeignIntents(const Operation& operation, const Request* request,
+                                      unsigned activities) const
+{
+    if (!onThread()) {
+        return true;
+    }
+    const std::shared_ptr<ProducerState> producer = request && request->m_state
+        ? request->m_state->producer.m_state : nullptr;
+    return std::any_of(m_intents.begin(), m_intents.end(),
+        [&operation, &producer, activities](const std::shared_ptr<IntentState>& intent) {
+            return intent->producer != producer && !intent->ended.load(std::memory_order_acquire)
+                && intent->operation.sameOperation(operation)
+                && (activities == 0 || (activities & static_cast<unsigned>(intent->activity)));
+        });
+}
+
 TxCoordinator::Intent TxCoordinator::requestIntent(const Request& request) const
 {
     Intent intent;
@@ -363,6 +484,11 @@ TxCoordinator::Intent TxCoordinator::requestIntent(const Request& request) const
         intent.m_state = request.m_state->intent;
     }
     return intent;
+}
+
+bool TxCoordinator::ownsRequest(const Request& request) const
+{
+    return request.m_state && request.m_state->identity == m_identity;
 }
 
 TxCoordinator::Intent TxCoordinator::beginRequest(const Request& request,
@@ -376,10 +502,15 @@ TxCoordinator::Intent TxCoordinator::beginRequest(const Request& request,
         return intent.pending() && intent.m_state->activity == activity
             && intent.m_state->operation.sameOperation(operation) ? intent : Intent{};
     }
-    intent = beginIntent(operation, {}, activity, request.m_state->producer.m_state);
+    Request input;
+    input.m_state = request.m_state->input;
+    intent = beginIntent(operation, {}, activity, request.m_state->producer.m_state,
+        input.m_state ? std::function<bool()>([input] { return input.valid(); }) : std::function<bool()>{},
+        request.m_state->producerEpoch);
     if (intent.pending()) {
         request.m_state->intent = intent.m_state;
         request.m_state->bound.store(true, std::memory_order_release);
+        m_boundRequests.push_back(request);
     }
     return intent;
 }
@@ -416,11 +547,12 @@ TxCoordinator::Intent TxCoordinator::closeRequest(const Request& request)
 }
 
 bool TxCoordinator::hasOtherIntents(const Operation& operation, const Intent& excluded,
-                                     unsigned activities) const
+                                     unsigned activities, bool includeFinishing) const
 {
     return onThread() && std::any_of(m_intents.begin(), m_intents.end(),
-        [&operation, &excluded, activities](const std::shared_ptr<IntentState>& intent) {
+        [&operation, &excluded, activities, includeFinishing](const std::shared_ptr<IntentState>& intent) {
             return intent != excluded.m_state && !intent->ended.load(std::memory_order_acquire)
+                && (includeFinishing || !intent->finishing)
                 && (activities == 0 || (activities & static_cast<unsigned>(intent->activity)))
                 && intent->operation.sameOperation(operation);
         });
@@ -512,7 +644,8 @@ TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
 
 TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
                                                 const Intent& previous, Activity activity,
-                                                const std::shared_ptr<ProducerState>& producer)
+                                                const std::shared_ptr<ProducerState>& producer,
+                                                std::function<bool()> inputPermit, quint64 producerEpoch)
 {
     const unsigned activityBit = static_cast<unsigned>(activity);
     if (!onThread() || !m_active.sameOperation(operation)
@@ -540,7 +673,9 @@ TxCoordinator::Intent TxCoordinator::beginIntent(const Operation& operation,
     intent.m_state = std::make_shared<IntentState>();
     intent.m_state->operation = operation;
     intent.m_state->producer = producer;
+    intent.m_state->producerEpoch = producerEpoch;
     intent.m_state->activity = activity;
+    intent.m_state->inputPermit = std::move(inputPermit);
     m_intents.push_back(intent.m_state);
     auto holds = std::make_shared<std::vector<std::weak_ptr<IntentState>>>();
     holds->reserve(m_intents.size());
@@ -576,6 +711,9 @@ bool TxCoordinator::endIntent(const Intent& intent)
     }
     intent.m_state->ended.store(true, std::memory_order_release);
     m_intents.erase(found);
+    std::erase_if(m_boundRequests, [&intent](const Request& request) {
+        return request.m_state->intent == intent.m_state;
+    });
     return true;
 }
 
@@ -610,6 +748,9 @@ void TxCoordinator::endIntents(const Operation& operation)
         intent->ended.store(true, std::memory_order_release);
         return true;
     });
+    std::erase_if(m_boundRequests, [&operation](const Request& request) {
+        return request.m_state->intent->operation.sameOperation(operation);
+    });
 }
 
 TxCoordinator::Operation TxCoordinator::cleanupFence() const
@@ -634,6 +775,22 @@ bool TxCoordinator::finishLocalIntent(const Operation& operation)
     m_unconfirmed = m_active;
     m_active = {};
     return true;
+}
+
+void TxCoordinator::finishLocalIntents(const Operation& operation)
+{
+    if (!onThread() || !operation.permitsCleanup()) {
+        return;
+    }
+    endIntents(operation);
+    (void)finishLocalIntent(operation);
+}
+
+void TxCoordinator::discardCapturedRequests()
+{
+    if (onThread()) {
+        m_identity->inputEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
 }
 
 void TxCoordinator::stop(StopReason reason)

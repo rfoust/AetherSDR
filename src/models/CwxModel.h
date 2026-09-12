@@ -80,7 +80,9 @@ public:
     void send(const QString& text);      // Send mode: full string
     void send(const QString& text, const TransmissionRoute& route);
     void sendChar(const QString& ch);    // Live mode: single char
+    void sendChar(const QString& ch, const TransmissionRoute& route);
     void sendMacro(int idx);             // 1-based (1=F1, 12=F12)
+    void sendMacro(int idx, const TransmissionRoute& route);
     void saveMacro(int idx, const QString& text); // 0-based
     void erase(int numChars);
     void clearBuffer();

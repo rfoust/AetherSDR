@@ -106,8 +106,9 @@ constexpr MeterSpec kMeterTable[] = {
 
 }  // namespace
 
-RadioCertification::RadioCertification(RadioModel* radio, AudioEngine* audio)
-    : m_radio(radio), m_audio(audio) {}
+RadioCertification::RadioCertification(RadioModel* radio, AudioEngine* audio,
+                                       std::shared_ptr<TxController> controller)
+    : m_radio(radio), m_audio(audio), m_txController(std::move(controller)) {}
 
 void RadioCertification::spin(int ms)
 {
@@ -158,9 +159,19 @@ bool RadioCertification::keyViaOperatorPath(bool on)
     const TxCoordinator::Operation previous = m_radio->transmitOperation();
     const bool keyedBefore = keyedNow();
 
-    auto& tx = m_radio->transmitModel();
     if (on) {
-        tx.requestPttOn(TransmitModel::PttSource::Mox);
+        // The authorization controller is captured once for the diagnostic,
+        // never fetched anew after one of its nested event-loop waits.
+        if (!m_txController || !m_txController->valid()
+            || !m_txController->belongsTo(m_radio)) {
+            ++m_keyRefusals;
+            return false;
+        }
+        m_keyInput = m_txController->capture(TxController::Activity::Mox);
+        if (!m_keyInput.start()) {
+            ++m_keyRefusals;
+            return false;
+        }
         if (m_onKey) {
             m_onKey(true, previous, keyedBefore);
         }
@@ -173,7 +184,7 @@ bool RadioCertification::keyViaOperatorPath(bool on)
         // modulator", "the transmitter is not producing RF". The diagnostic
         // would blame the chain for a refusal it never noticed.
         spin(250);
-        if (!keyedNow()) {
+        if (!m_keyInput.valid() || !keyedNow()) {
             ++m_keyRefusals;
             if (m_onKey)
                 m_onKey(false, previous, keyedBefore);
@@ -182,7 +193,7 @@ bool RadioCertification::keyViaOperatorPath(bool on)
         return true;
     }
 
-    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    m_keyInput.stop();
 
     // WAIT FOR THE RADIO TO ACTUALLY UNKEY BEFORE DISARMING THE WATCHDOG.
     //

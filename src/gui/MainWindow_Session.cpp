@@ -1231,8 +1231,12 @@ void MainWindow::wireRadioModel()
                     << " down=" << down
                     << " schedMs=" << cwTraceMsAt(when);
             }
-            m_radioModel.queueCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                       traceId, sourceMs, when);
+        });
+        m_iambicKeyer->setOnRoutedKeyDownChange([this](bool down,
+                std::chrono::steady_clock::time_point when, const TxCoordinator::Request& input) {
+            m_radioModel.queueProducerCwKeyEdge(input, down, QStringLiteral("cw:iambic-keyer"),
+                m_lastCwPaddleTraceId.load(std::memory_order_relaxed),
+                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce
@@ -2646,8 +2650,18 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     m_automation->setSliceReceiveSourceHandler(
         [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
     m_automation->setModemAutomationHandler(
-        [this](const QString& verb, const QString& action, const QString& value) {
-            return automationModemCommand(verb, action, value);
+        [this](const QString& verb, const QString& action, const QString& value,
+               const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
+            return automationModemCommand(verb, action, value, controller, input);
+        });
+    m_automation->setShortcutAutomationHandler(
+        [this](const QString& id, bool allowTx, const std::shared_ptr<TxController>& controller) {
+            return fireShortcutAction(id, allowTx, controller);
+        });
+    m_automation->setKeyEventAutomationHandler(
+        [this](const QString& spec, bool press, bool allowTx,
+               const std::shared_ptr<TxController>& controller) {
+            return injectKeyEventForAutomation(spec, press, allowTx, controller);
         });
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });

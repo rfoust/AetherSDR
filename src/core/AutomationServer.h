@@ -23,6 +23,7 @@ class QWebSocket;
 #include "MemoryTelemetry.h"
 #include "MeterObservationWindow.h"
 #include "TxCoordinator.h"
+#include "models/TxController.h"
 
 class QLocalServer;
 class QLocalSocket;
@@ -38,6 +39,7 @@ class SliceModel;
 class AudioEngine;
 class QsoRecorder;
 class AetherClockModel;
+class TxPointerAction;
 
 // In-app, agent-first automation bridge (issue #3646, Phases 0-1).
 //
@@ -286,9 +288,20 @@ public:
     // AetherModem window headlessly if needed and forwards to it, exactly as the
     // KISS-TNC-on-startup path does. Arguments are (verb, action, value).
     void setModemAutomationHandler(
-        std::function<QJsonObject(const QString&, const QString&, const QString&)> handler)
+        std::function<QJsonObject(const QString&, const QString&, const QString&,
+                                  const std::shared_ptr<TxController>&, const TxController::Input&)> handler)
     {
         m_modemAutomationHandler = std::move(handler);
+    }
+    void setShortcutAutomationHandler(
+        std::function<int(const QString&, bool, const std::shared_ptr<TxController>&)> handler)
+    {
+        m_shortcutAutomationHandler = std::move(handler);
+    }
+    void setKeyEventAutomationHandler(
+        std::function<int(const QString&, bool, bool, const std::shared_ptr<TxController>&)> handler)
+    {
+        m_keyEventAutomationHandler = std::move(handler);
     }
     void setSliceCenterLockHandler(std::function<QJsonObject(int, bool)> handler)
     {
@@ -352,7 +365,7 @@ public:
     // open-socket behavior for headless/CI use. Safe to call while running
     // (the Radio Setup → Network rotate button does exactly that); it takes
     // effect on the next request.
-    void setAuthToken(const QString& token) { m_authToken = token; }
+    void setAuthToken(const QString& token);
     QString authToken() const { return m_authToken; }
 
     // Runtime TX-automation gate (#3646). Mirrors AETHER_AUTOMATION_ALLOW_TX
@@ -368,13 +381,7 @@ public:
     // keying. Operator-driven from Radio Setup → Network; enforced in
     // handleLine so a client can't bypass it. Safe to toggle live. `ping` and
     // `whoami` report the current state.
-    void setReadOnly(bool readOnly)
-    {
-        if (m_readOnly != readOnly) {
-            ++m_txPermissionEpoch;
-            m_readOnly = readOnly;
-        }
-    }
+    void setReadOnly(bool readOnly);
     bool readOnly() const { return m_readOnly; }
 
 private slots:
@@ -449,7 +456,7 @@ private:
     // forgetting the state.
     QJsonObject doGesture(const QString& action, const QString& target,
                           const QString& value, QLocalSocket* sock);
-    void cancelGesture(QLocalSocket* owner, const QString& reason);
+    void cancelGesture(QLocalSocket* owner, const QString& reason, bool activate = false);
     QJsonObject pointerSafetyError(const QWidget* widget,
                                    const QString& target,
                                    const QString& verb) const;
@@ -648,12 +655,13 @@ private:
     QJsonObject doHealth();
     QJsonObject doAtu(const QString& action);
 
-    void forceUnkey(const char* reason);  // captured-operation stop, never a later over
-    // Claim the in-progress transmission for the bridge, so onTxWatchdog()
-    // polices it. Call AFTER issuing a TX-capable action. Refuses to claim a
-    // transmission that predates the request — see m_txKeyedAtRequestStart.
+    void forceUnkey(const char* reason);  // invalidate and stop only our captured producer inputs
+    std::shared_ptr<TxController> txController(bool mayKey = true);
+    QJsonObject invokeTxAction(QObject* object, const QString& target,
+                               const QString& action, const QString& value);
+    // Arm at producer admission, before backend/UI notifications can reenter.
+    // Other contributors to the same desktop operation remain independent.
     void markTxBridgeInitiated();
-    void markTxBridgeInitiated(const TxCoordinator::Operation& previous, bool keyedBefore);
     void clearTxBridgeInitiated();
     void deferInvokeAction(std::function<void()> action, bool transmitAction);
     // Whether the original operation or its reported tail is still ours. Gates the
@@ -767,6 +775,7 @@ private:
     QString       m_label;            // AETHER_AUTOMATION_LABEL (human instance tag)
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
     struct PointerGesture {
+        std::shared_ptr<TxPointerAction> txAction;
         QPointer<QLocalSocket> owner;
         QPointer<QWidget> widget;
         QString target;
@@ -795,7 +804,8 @@ private:
     }
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
-    std::function<QJsonObject(const QString&, const QString&, const QString&)>
+    std::function<QJsonObject(const QString&, const QString&, const QString&,
+                             const std::shared_ptr<TxController>&, const TxController::Input&)>
         m_modemAutomationHandler;
     // Shared body of the `modem` and `link` verbs.
     QJsonObject doModemAutomation(const QString& verb, const QString& action,
@@ -850,6 +860,12 @@ private:
     QTimer* m_txWatchdog{nullptr};
     QElapsedTimer m_txKeyClock;   // monotonic, never restarted by repeated key-on
     TxCoordinator::Operation m_txBridgeOperation;
+    std::shared_ptr<TxController> m_txController;
+    std::function<int(const QString&, bool, const std::shared_ptr<TxController>&)>
+        m_shortcutAutomationHandler;
+    std::function<int(const QString&, bool, bool, const std::shared_ptr<TxController>&)>
+        m_keyEventAutomationHandler;
+    bool m_txAuthorizationChanging{false};
     quint64 m_txPermissionEpoch{0}; // revocation fences already queued widget actions
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
     // True while the transmission in progress was started BY THIS BRIDGE. The
@@ -860,13 +876,6 @@ private:
     // radiocert spins nested event loops for minutes; commands arriving
     // during a run dispatch inside it, so a second one is refused.
     bool    m_certRunning{false};
-    // Transmitter state sampled at the top of handleLine(), before any verb
-    // handler runs. markTxBridgeInitiated() needs it: it is called after its
-    // action has been issued, and the key verbs update TransmitModel
-    // optimistically, so by then "keyed" cannot tell "this action keyed it"
-    // apart from "it was already up".
-    bool    m_txKeyedAtRequestStart{false};
-    TxCoordinator::Operation m_txOperationAtRequestStart;
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     // Correlates an extension reply with the request that caused it. Starts at
