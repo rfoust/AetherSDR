@@ -1,0 +1,70 @@
+{
+  "issue": 5925,
+  "base": "8062ed692e043fcab824c64055237d3ad0cda9bb",
+  "platform": "macOS arm64 / Qt 6.11.2",
+  "before": {
+    "nativeBeforeLookup": [
+      "AetherSDR",
+      "File",
+      "Settings",
+      "Profiles",
+      "Tools",
+      "View",
+      "Help"
+    ],
+    "barsBeforeLookup": [
+      "//AetherSDR::MainWindow/QWidget/AetherSDR::TitleBar/QMenuBar"
+    ],
+    "barsAfterLookup": [
+      "//AetherSDR::MainWindow/QWidget/AetherSDR::TitleBar/QMenuBar",
+      "//AetherSDR::MainWindow/QMenuBar"
+    ],
+    "nativeAfterFocus": [
+      "AetherSDR"
+    ]
+  },
+  "after": {
+    "barsBeforeLookup": [
+      "//AetherSDR::MainWindow/QWidget/AetherSDR::TitleBar/QMenuBar"
+    ],
+    "barsAfterRepeatedListOpenInvoke": [
+      "//AetherSDR::MainWindow/QWidget/AetherSDR::TitleBar/QMenuBar"
+    ],
+    "nativeAfterFocus1": [
+      "AetherSDR",
+      "File",
+      "Settings",
+      "Profiles",
+      "Tools",
+      "View",
+      "Help"
+    ],
+    "nativeAfterFocus2": [
+      "AetherSDR",
+      "File",
+      "Settings",
+      "Profiles",
+      "Tools",
+      "View",
+      "Help"
+    ]
+  },
+  "validation": {
+    "focusedTests": "3 passed, 0 failed",
+    "originalCodeRegression": "failed as expected",
+    "resolveOnlyMutation": "failed as expected",
+    "collectOnlyMutation": "failed as expected",
+    "fullArm64Build": "passed",
+    "rade": "enabled",
+    "rnnoiseX86Sources": "absent"
+  },
+  "safety": {
+    "radioConnected": false,
+    "transmitting": false,
+    "txAllowed": false,
+    "profiles": "isolated",
+    "proofProcesses": "stopped",
+    "appLock": "released"
+  },
+  "bridgeGap": "Widget capture omits the native macOS menu bar. Native accessibility readback and actual native Help-menu opening supplement bridge inventory and widget-tree evidence."
+}
