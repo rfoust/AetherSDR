@@ -44,6 +44,8 @@ public:
     // Where the core verbs emit their SmartSDR command strings — RadioModel's
     // existing sendCommand() funnel, so verbs reuse the one wire-write path.
     void setCommandSink(std::function<void(const QString&)> sink);
+    using CommandReply = std::function<void(int, const QString&)>;
+    void setNicknameCommandSink(std::function<bool(const QString&, CommandReply)> sink);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -77,7 +79,8 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
-    ReceiveDispatch requestRadioNickname(const QString& nickname) override;
+    ReceiveDispatch requestRadioNickname(const QString& nickname,
+                                         NicknameCompletion completion = {}) override;
     ReceiveDispatch requestSliceControl(int sliceId, const SliceControlRequest& request) override;
     ReceiveDispatch requestTransmitControl(const TransmitControlRequest& request,
         TunePowerContext context = TunePowerContext::Deferred) override;
@@ -213,6 +216,11 @@ private:
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<void(const QString&)> m_sink;
+    std::function<bool(const QString&, CommandReply)> m_nicknameSink;
+    quint64 m_nicknameSession{0};
+    quint64 m_nicknameRequest{0};
+    quint64 m_nicknameAppliedRequest{0};
+    quint64 m_nicknameStatusRevision{0};
     std::function<void(const QString&, const TxCoordinator::Command&)> m_txSink;
     std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
