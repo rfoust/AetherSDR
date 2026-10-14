@@ -1,0 +1,3370 @@
+[
+  {
+    "request": {
+      "cmd": "dumpTree"
+    },
+    "response": {
+      "ok": true,
+      "roots": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 480,
+                    "w": 640,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 480,
+                "w": 640,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 16
+                  },
+                  "value": "IQ 1:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 1 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 2,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 16
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate1",
+                  "value": "96k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 20
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 1 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 18
+                  },
+                  "objectName": "daxIqEnable1",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 41
+                  },
+                  "value": "IQ 2:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 2 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 41
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate2",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 45
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 2 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 43
+                  },
+                  "objectName": "daxIqEnable2",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 66
+                  },
+                  "value": "IQ 3:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 3 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 66
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate3",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 70
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 3 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 68
+                  },
+                  "objectName": "daxIqEnable3",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 91
+                  },
+                  "value": "IQ 4:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 4 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 91
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate4",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 95
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 4 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 93
+                  },
+                  "objectName": "daxIqEnable4",
+                  "value": "Off",
+                  "visible": true
+                }
+              ],
+              "class": "AetherSDR::DaxIqApplet",
+              "enabled": true,
+              "geometry": {
+                "h": 102,
+                "w": 241,
+                "x": 13,
+                "y": 13
+              },
+              "objectName": "daxIqProofApplet",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 121
+              },
+              "objectName": "FLEX-6400M",
+              "value": "FLEX-6400M",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 152
+              },
+              "objectName": "FLEX-6700",
+              "value": "FLEX-6700",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 183
+              },
+              "objectName": "closeProof",
+              "value": "Close proof",
+              "visible": true
+            }
+          ],
+          "class": "QWidget",
+          "enabled": true,
+          "geometry": {
+            "h": 217,
+            "w": 263,
+            "x": 2,
+            "y": 2
+          },
+          "objectName": "daxIqRateProof",
+          "visible": true,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 480,
+                    "w": 640,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 480,
+                "w": 640,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 480,
+                    "w": 640,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 480,
+                "w": 640,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 480,
+                    "w": 640,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 100,
+                        "x": 0,
+                        "y": 0
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 100,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 480,
+                "w": 640,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        }
+      ]
+    }
+  },
+  {
+    "request": {
+      "cmd": "grab",
+      "target": "daxIqProofApplet",
+      "path": "/private/tmp/dax-iq-pr-proof/96k-applet.png"
+    },
+    "response": {
+      "bytes": 4157,
+      "class": "DaxIqApplet",
+      "height": 102,
+      "ok": true,
+      "path": "/private/tmp/dax-iq-pr-proof/96k-applet.png",
+      "target": "daxIqProofApplet",
+      "width": 241
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "daxIqRate1",
+      "action": "showPopup"
+    },
+    "response": {
+      "action": "showPopup",
+      "class": "QComboBox",
+      "deferred": true,
+      "ok": true,
+      "target": "daxIqRate1"
+    }
+  },
+  {
+    "request": {
+      "cmd": "grab",
+      "target": "aetherComboPopup",
+      "path": "/private/tmp/dax-iq-pr-proof/96k-choices.png"
+    },
+    "response": {
+      "bytes": 2391,
+      "class": "QComboBoxPrivateContainer",
+      "height": 66,
+      "ok": true,
+      "path": "/private/tmp/dax-iq-pr-proof/96k-choices.png",
+      "target": "aetherComboPopup",
+      "width": 60
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "daxIqRate1",
+      "action": "hidePopup"
+    },
+    "response": {
+      "action": "hidePopup",
+      "class": "QComboBox",
+      "deferred": true,
+      "ok": true,
+      "target": "daxIqRate1"
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "daxIqRate1",
+      "action": "setCurrentText",
+      "value": "192k"
+    },
+    "response": {
+      "error": "combo item is disabled",
+      "ok": false
+    }
+  },
+  {
+    "request": {
+      "cmd": "dumpTree"
+    },
+    "response": {
+      "ok": true,
+      "roots": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 16
+                  },
+                  "value": "IQ 1:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 1 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 2,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 16
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate1",
+                  "value": "96k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 20
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 1 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 18
+                  },
+                  "objectName": "daxIqEnable1",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 41
+                  },
+                  "value": "IQ 2:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 2 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 41
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate2",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 45
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 2 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 43
+                  },
+                  "objectName": "daxIqEnable2",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 66
+                  },
+                  "value": "IQ 3:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 3 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 66
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate3",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 70
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 3 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 68
+                  },
+                  "objectName": "daxIqEnable3",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 91
+                  },
+                  "value": "IQ 4:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model. Available, not currently active",
+                  "accessibleName": "IQ 4 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 91
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate4",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 95
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 4 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 93
+                  },
+                  "objectName": "daxIqEnable4",
+                  "value": "Off",
+                  "visible": true
+                }
+              ],
+              "class": "AetherSDR::DaxIqApplet",
+              "enabled": true,
+              "geometry": {
+                "h": 102,
+                "w": 241,
+                "x": 13,
+                "y": 13
+              },
+              "objectName": "daxIqProofApplet",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 121
+              },
+              "objectName": "FLEX-6400M",
+              "value": "FLEX-6400M",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 152
+              },
+              "objectName": "FLEX-6700",
+              "value": "FLEX-6700",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 183
+              },
+              "objectName": "closeProof",
+              "value": "Close proof",
+              "visible": true
+            }
+          ],
+          "class": "QWidget",
+          "enabled": true,
+          "geometry": {
+            "h": 217,
+            "w": 263,
+            "x": 2,
+            "y": 2
+          },
+          "objectName": "daxIqRateProof",
+          "visible": true,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 60,
+                    "w": 58,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 50,
+                        "y": 5
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 50,
+                        "y": 5
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 60,
+                "w": 58,
+                "x": 50,
+                "y": 5
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 49,
+                "y": 2
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 49,
+                "y": 2
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 66,
+            "w": 60,
+            "x": 49,
+            "y": 2
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        }
+      ]
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "FLEX-6700",
+      "action": "click"
+    },
+    "response": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "FLEX-6700"
+    }
+  },
+  {
+    "request": {
+      "cmd": "dumpTree"
+    },
+    "response": {
+      "ok": true,
+      "roots": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 16
+                  },
+                  "value": "IQ 1:",
+                  "visible": true
+                },
+                {
+                  "accessibleName": "IQ 1 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 3,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 16
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate1",
+                  "value": "192k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 20
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 1 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 18
+                  },
+                  "objectName": "daxIqEnable1",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 41
+                  },
+                  "value": "IQ 2:",
+                  "visible": true
+                },
+                {
+                  "accessibleName": "IQ 2 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 41
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate2",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 45
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 2 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 43
+                  },
+                  "objectName": "daxIqEnable2",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 66
+                  },
+                  "value": "IQ 3:",
+                  "visible": true
+                },
+                {
+                  "accessibleName": "IQ 3 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 66
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate3",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 70
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 3 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 68
+                  },
+                  "objectName": "daxIqEnable3",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 91
+                  },
+                  "value": "IQ 4:",
+                  "visible": true
+                },
+                {
+                  "accessibleName": "IQ 4 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 91
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate4",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 95
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 4 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 93
+                  },
+                  "objectName": "daxIqEnable4",
+                  "value": "Off",
+                  "visible": true
+                }
+              ],
+              "class": "AetherSDR::DaxIqApplet",
+              "enabled": true,
+              "geometry": {
+                "h": 102,
+                "w": 241,
+                "x": 13,
+                "y": 13
+              },
+              "objectName": "daxIqProofApplet",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 121
+              },
+              "objectName": "FLEX-6400M",
+              "value": "FLEX-6400M",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 152
+              },
+              "objectName": "FLEX-6700",
+              "value": "FLEX-6700",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 183
+              },
+              "objectName": "closeProof",
+              "value": "Close proof",
+              "visible": true
+            }
+          ],
+          "class": "QWidget",
+          "enabled": true,
+          "geometry": {
+            "h": 217,
+            "w": 263,
+            "x": 2,
+            "y": 2
+          },
+          "objectName": "daxIqRateProof",
+          "visible": true,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 60,
+                    "w": 58,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 50,
+                        "y": 5
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 50,
+                        "y": 5
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 60,
+                "w": 58,
+                "x": 50,
+                "y": 5
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 49,
+                "y": 2
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 49,
+                "y": 2
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 66,
+            "w": 60,
+            "x": 49,
+            "y": 2
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        }
+      ]
+    }
+  },
+  {
+    "request": {
+      "cmd": "grab",
+      "target": "daxIqProofApplet",
+      "path": "/private/tmp/dax-iq-pr-proof/192k-applet.png"
+    },
+    "response": {
+      "bytes": 4278,
+      "class": "DaxIqApplet",
+      "height": 102,
+      "ok": true,
+      "path": "/private/tmp/dax-iq-pr-proof/192k-applet.png",
+      "target": "daxIqProofApplet",
+      "width": 241
+    }
+  },
+  {
+    "request": {
+      "cmd": "invoke",
+      "target": "FLEX-6400M",
+      "action": "click"
+    },
+    "response": {
+      "action": "click",
+      "class": "QPushButton",
+      "deferred": true,
+      "ok": true,
+      "target": "FLEX-6400M"
+    }
+  },
+  {
+    "request": {
+      "cmd": "dumpTree"
+    },
+    "response": {
+      "ok": true,
+      "roots": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 16
+                  },
+                  "value": "IQ 1:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model.",
+                  "accessibleName": "IQ 1 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 2,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 16
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate1",
+                  "value": "96k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 20
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 1 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 18
+                  },
+                  "objectName": "daxIqEnable1",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 41
+                  },
+                  "value": "IQ 2:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model.",
+                  "accessibleName": "IQ 2 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 41
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate2",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 45
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 2 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 43
+                  },
+                  "objectName": "daxIqEnable2",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 66
+                  },
+                  "value": "IQ 3:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model.",
+                  "accessibleName": "IQ 3 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 66
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate3",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 70
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 3 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 68
+                  },
+                  "objectName": "daxIqEnable3",
+                  "value": "Off",
+                  "visible": true
+                },
+                {
+                  "class": "QLabel",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 28,
+                    "x": 17,
+                    "y": 91
+                  },
+                  "value": "IQ 4:",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "192 kHz is unavailable on this radio model.",
+                  "accessibleName": "IQ 4 sample rate",
+                  "class": "QComboBox",
+                  "currentIndex": 1,
+                  "enabled": true,
+                  "geometry": {
+                    "h": 23,
+                    "w": 60,
+                    "x": 49,
+                    "y": 91
+                  },
+                  "items": [
+                    "24k",
+                    "48k",
+                    "96k",
+                    "192k"
+                  ],
+                  "objectName": "daxIqRate4",
+                  "value": "48k",
+                  "visible": true
+                },
+                {
+                  "class": "QProgressBar",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 14,
+                    "w": 97,
+                    "x": 113,
+                    "y": 95
+                  },
+                  "value": "0",
+                  "visible": true
+                },
+                {
+                  "accessibleDescription": "Available, not currently active",
+                  "accessibleName": "IQ 4 stream",
+                  "class": "QPushButton",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 36,
+                    "x": 214,
+                    "y": 93
+                  },
+                  "objectName": "daxIqEnable4",
+                  "value": "Off",
+                  "visible": true
+                }
+              ],
+              "class": "AetherSDR::DaxIqApplet",
+              "enabled": true,
+              "geometry": {
+                "h": 102,
+                "w": 241,
+                "x": 13,
+                "y": 13
+              },
+              "objectName": "daxIqProofApplet",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 121
+              },
+              "objectName": "FLEX-6400M",
+              "value": "FLEX-6400M",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 152
+              },
+              "objectName": "FLEX-6700",
+              "value": "FLEX-6700",
+              "visible": true
+            },
+            {
+              "class": "QPushButton",
+              "enabled": true,
+              "geometry": {
+                "h": 25,
+                "w": 241,
+                "x": 13,
+                "y": 183
+              },
+              "objectName": "closeProof",
+              "value": "Close proof",
+              "visible": true
+            }
+          ],
+          "class": "QWidget",
+          "enabled": true,
+          "geometry": {
+            "h": 217,
+            "w": 263,
+            "x": 2,
+            "y": 2
+          },
+          "objectName": "daxIqRateProof",
+          "visible": true,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 60,
+                    "w": 58,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 50,
+                        "y": 5
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 50,
+                        "y": 5
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 50,
+                    "y": 5
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 60,
+                "w": 58,
+                "x": 50,
+                "y": 5
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 49,
+                "y": 2
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 49,
+                "y": 2
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 66,
+            "w": 60,
+            "x": 49,
+            "y": 2
+          },
+          "visible": false,
+          "windowState": "normal"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 24,
+                    "w": 98,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_viewport",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 18,
+                        "w": 100,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 0,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 18,
+                    "w": 100,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_hcontainer",
+                  "visible": false
+                },
+                {
+                  "children": [
+                    {
+                      "class": "QScrollBar",
+                      "enabled": true,
+                      "geometry": {
+                        "h": 30,
+                        "w": 18,
+                        "x": 1,
+                        "y": 3
+                      },
+                      "range": {
+                        "max": 3,
+                        "min": 0
+                      },
+                      "sliderDown": false,
+                      "value": "0",
+                      "visible": false
+                    }
+                  ],
+                  "class": "QWidget",
+                  "enabled": true,
+                  "geometry": {
+                    "h": 30,
+                    "w": 18,
+                    "x": 1,
+                    "y": 3
+                  },
+                  "objectName": "qt_scrollarea_vcontainer",
+                  "visible": false
+                }
+              ],
+              "class": "QComboBoxListView",
+              "enabled": true,
+              "geometry": {
+                "h": 24,
+                "w": 98,
+                "x": 1,
+                "y": 3
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            },
+            {
+              "class": "QComboBoxPrivateScroller",
+              "enabled": true,
+              "geometry": {
+                "h": 30,
+                "w": 100,
+                "x": 0,
+                "y": 0
+              },
+              "visible": false
+            }
+          ],
+          "class": "QComboBoxPrivateContainer",
+          "enabled": true,
+          "geometry": {
+            "h": 30,
+            "w": 100,
+            "x": 0,
+            "y": 0
+          },
+          "visible": false,
+          "windowState": "normal"
+        }
+      ]
+    }
+  }
+]
