@@ -872,9 +872,8 @@ void RadioModel::setupBackend(const QString& family)
             m_backend->setOfflineHealthSource(offline);
 
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
-            flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
-            flex->setNicknameCommandSink([this](const QString& cmd, FlexBackend::CommandReply reply) {
-                return sendCmd(cmd, std::move(reply)) != 0;
+            flex->setCommandSink([this](const QString& cmd, FlexBackend::CommandReply reply) {
+                return sendCmdPublic(cmd, std::move(reply));
             });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
                 sendTxKeyingCommand(cmd, fence);

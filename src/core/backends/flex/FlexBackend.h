@@ -42,10 +42,11 @@ public:
     PanadapterStream* panStream()  const { return m_panStream; }
 
     // Where the core verbs emit their SmartSDR command strings — RadioModel's
-    // existing sendCommand() funnel, so verbs reuse the one wire-write path.
-    void setCommandSink(std::function<void(const QString&)> sink);
+    // existing guarded command funnel, so verbs reuse the one wire-write path.
     using CommandReply = std::function<void(int, const QString&)>;
-    void setNicknameCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    void setCommandSink(std::function<bool(const QString&, CommandReply)> sink);
+    // Encoding-only observers cannot dispatch requests that need a radio reply.
+    void setCommandSink(std::function<void(const QString&)> sink);
     // Primary keying verbs use an operation-fenced writer, never the generic
     // command sink. The bool distinguishes key-on from cleanup, not authority.
     // Trusted engine composition supplies the original operation at dispatch.
@@ -215,8 +216,7 @@ private:
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
-    std::function<void(const QString&)> m_sink;
-    std::function<bool(const QString&, CommandReply)> m_nicknameSink;
+    std::function<bool(const QString&, CommandReply)> m_sink;
     quint64 m_nicknameSession{0};
     quint64 m_nicknameRequest{0};
     quint64 m_nicknameAppliedRequest{0};
