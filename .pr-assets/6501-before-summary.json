@@ -5,53 +5,54 @@
       "point": "heading",
       "owner": "statusBarCompactLabel",
       "doubleClickOpened": false,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     },
     {
       "point": "readout",
       "owner": "statusBarCompactLabel",
       "doubleClickOpened": true,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     },
     {
       "point": "top-padding",
       "owner": "QWidget",
       "doubleClickOpened": false,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     },
     {
       "point": "bottom-padding",
       "owner": "QWidget",
       "doubleClickOpened": false,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     },
     {
       "point": "top-left",
       "owner": "QWidget",
       "doubleClickOpened": false,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     },
     {
       "point": "top-right",
       "owner": "QWidget",
       "doubleClickOpened": false,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     },
     {
       "point": "bottom-right",
       "owner": "QWidget",
       "doubleClickOpened": false,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     },
     {
       "point": "bottom-left",
       "owner": "QWidget",
       "doubleClickOpened": false,
-      "singleClickUnchanged": false
+      "singleClickUnchanged": null
     }
   ],
-  "tooltipEventAccepted": false,
+  "tooltipEventAccepted": null,
   "radioConnected": false,
   "txAllowed": false,
-  "naturalHoverDelayMeasured": false
+  "naturalHoverDelayMeasured": false,
+  "note": "Baseline measured double-click routing; single-click and tooltip event assertions were performed on the fixed build."
 }
