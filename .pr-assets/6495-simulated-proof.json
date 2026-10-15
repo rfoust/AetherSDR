@@ -1,0 +1,402 @@
+{
+  "scope": "Client-side simulation through production AutomationServer.handleLine, VfoWidget, RadioModel, SliceModel and FlexBackend. No listener, network peer, physical radio or RF transmission.",
+  "baseline": "Limit-disabled mutation of the fixed tree, reproducing the previous 0..100 limit; not an unmodified upstream application run.",
+  "cases": {
+    "limit-disabled-modern": {
+      "kind": "in-process simulation; no radio or socket",
+      "firmware": "4.3.16.42034",
+      "modelLevel": 100,
+      "encodedCommands": [
+        "slice set 0 speex_nr_level=100"
+      ],
+      "slider": {
+        "accessibleName": "NRS level",
+        "class": "QSlider",
+        "enabled": true,
+        "geometry": {
+          "h": 20,
+          "w": 160,
+          "x": 54,
+          "y": 201
+        },
+        "objectName": "dspLevelSlider",
+        "range": {
+          "max": 100,
+          "min": 0
+        },
+        "sliderDown": false,
+        "value": "100",
+        "visible": true
+      },
+      "bridgeInvocations": [
+        {
+          "reply": {
+            "action": "click",
+            "class": "QPushButton",
+            "deferred": true,
+            "ok": true,
+            "target": "DSP settings (DSP active)"
+          },
+          "request": {
+            "action": "click",
+            "cmd": "invoke",
+            "target": "DSP settings (DSP active)",
+            "value": ""
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "25",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "25"
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "100",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "100"
+          }
+        }
+      ]
+    },
+    "fixed-modern": {
+      "kind": "in-process simulation; no radio or socket",
+      "firmware": "4.3.16.42034",
+      "modelLevel": 50,
+      "encodedCommands": [
+        "slice set 0 speex_nr_level=50"
+      ],
+      "slider": {
+        "accessibleName": "NRS level",
+        "class": "QSlider",
+        "enabled": true,
+        "geometry": {
+          "h": 20,
+          "w": 160,
+          "x": 54,
+          "y": 201
+        },
+        "objectName": "dspLevelSlider",
+        "range": {
+          "max": 50,
+          "min": 0
+        },
+        "sliderDown": false,
+        "value": "50",
+        "visible": true
+      },
+      "bridgeInvocations": [
+        {
+          "reply": {
+            "action": "click",
+            "class": "QPushButton",
+            "deferred": true,
+            "ok": true,
+            "target": "DSP settings (DSP active)"
+          },
+          "request": {
+            "action": "click",
+            "cmd": "invoke",
+            "target": "DSP settings (DSP active)",
+            "value": ""
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "25",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "25"
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "50",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "100"
+          }
+        }
+      ]
+    },
+    "fixed-legacy": {
+      "kind": "in-process simulation; no radio or socket",
+      "firmware": "4.2.20.41343",
+      "modelLevel": 100,
+      "encodedCommands": [
+        "slice set 0 speex_nr_level=100"
+      ],
+      "slider": {
+        "accessibleName": "NRS level",
+        "class": "QSlider",
+        "enabled": true,
+        "geometry": {
+          "h": 20,
+          "w": 160,
+          "x": 52,
+          "y": 199
+        },
+        "objectName": "dspLevelSlider",
+        "range": {
+          "max": 100,
+          "min": 0
+        },
+        "sliderDown": false,
+        "value": "100",
+        "visible": true
+      },
+      "bridgeInvocations": [
+        {
+          "reply": {
+            "action": "click",
+            "class": "QPushButton",
+            "deferred": true,
+            "ok": true,
+            "target": "DSP settings (DSP active)"
+          },
+          "request": {
+            "action": "click",
+            "cmd": "invoke",
+            "target": "DSP settings (DSP active)",
+            "value": ""
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "25",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "25"
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "50",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "100"
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "100",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "100"
+          }
+        }
+      ]
+    },
+    "fixed-readback": {
+      "kind": "in-process simulation; no radio or socket",
+      "firmware": "4.3.16.42034",
+      "modelLevel": 17,
+      "encodedCommands": [],
+      "slider": {
+        "accessibleName": "NRS level",
+        "class": "QSlider",
+        "enabled": true,
+        "geometry": {
+          "h": 20,
+          "w": 160,
+          "x": 54,
+          "y": 201
+        },
+        "objectName": "dspLevelSlider",
+        "range": {
+          "max": 50,
+          "min": 0
+        },
+        "sliderDown": false,
+        "value": "17",
+        "visible": true
+      },
+      "bridgeInvocations": [
+        {
+          "reply": {
+            "action": "click",
+            "class": "QPushButton",
+            "deferred": true,
+            "ok": true,
+            "target": "DSP settings (DSP active)"
+          },
+          "request": {
+            "action": "click",
+            "cmd": "invoke",
+            "target": "DSP settings (DSP active)",
+            "value": ""
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "25",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "25"
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "50",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "100"
+          }
+        }
+      ]
+    },
+    "fixed-range-change": {
+      "kind": "in-process simulation; no radio or socket",
+      "firmware": "4.3.16.42034",
+      "modelLevel": 80,
+      "encodedCommands": [],
+      "slider": {
+        "accessibleName": "NRS level",
+        "class": "QSlider",
+        "enabled": true,
+        "geometry": {
+          "h": 20,
+          "w": 160,
+          "x": 52,
+          "y": 199
+        },
+        "objectName": "dspLevelSlider",
+        "range": {
+          "max": 50,
+          "min": 0
+        },
+        "sliderDown": false,
+        "value": "50",
+        "visible": true
+      },
+      "bridgeInvocations": [
+        {
+          "reply": {
+            "action": "click",
+            "class": "QPushButton",
+            "deferred": true,
+            "ok": true,
+            "target": "DSP settings (DSP active)"
+          },
+          "request": {
+            "action": "click",
+            "cmd": "invoke",
+            "target": "DSP settings (DSP active)",
+            "value": ""
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "25",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "25"
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "50",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "100"
+          }
+        },
+        {
+          "reply": {
+            "action": "setValue",
+            "class": "QSlider",
+            "newValue": "100",
+            "ok": true,
+            "target": "dspLevelSlider"
+          },
+          "request": {
+            "action": "setValue",
+            "cmd": "invoke",
+            "target": "dspLevelSlider",
+            "value": "100"
+          }
+        }
+      ]
+    }
+  }
+}
