@@ -1,0 +1,59 @@
+{
+  "fixed": true,
+  "points": [
+    {
+      "point": "heading",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    },
+    {
+      "point": "readout",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    },
+    {
+      "point": "top-padding",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    },
+    {
+      "point": "bottom-padding",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    },
+    {
+      "point": "top-left",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    },
+    {
+      "point": "top-right",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    },
+    {
+      "point": "bottom-right",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    },
+    {
+      "point": "bottom-left",
+      "owner": "networkStatusBlock",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": true
+    }
+  ],
+  "tooltipEventAccepted": true,
+  "radioConnected": false,
+  "txAllowed": false,
+  "naturalHoverDelayMeasured": false,
+  "tooltipDismissedOnOpen": true,
+  "dialogReused": true
+}

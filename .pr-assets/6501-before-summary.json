@@ -1,0 +1,57 @@
+{
+  "fixed": false,
+  "points": [
+    {
+      "point": "heading",
+      "owner": "statusBarCompactLabel",
+      "doubleClickOpened": false,
+      "singleClickUnchanged": false
+    },
+    {
+      "point": "readout",
+      "owner": "statusBarCompactLabel",
+      "doubleClickOpened": true,
+      "singleClickUnchanged": false
+    },
+    {
+      "point": "top-padding",
+      "owner": "QWidget",
+      "doubleClickOpened": false,
+      "singleClickUnchanged": false
+    },
+    {
+      "point": "bottom-padding",
+      "owner": "QWidget",
+      "doubleClickOpened": false,
+      "singleClickUnchanged": false
+    },
+    {
+      "point": "top-left",
+      "owner": "QWidget",
+      "doubleClickOpened": false,
+      "singleClickUnchanged": false
+    },
+    {
+      "point": "top-right",
+      "owner": "QWidget",
+      "doubleClickOpened": false,
+      "singleClickUnchanged": false
+    },
+    {
+      "point": "bottom-right",
+      "owner": "QWidget",
+      "doubleClickOpened": false,
+      "singleClickUnchanged": false
+    },
+    {
+      "point": "bottom-left",
+      "owner": "QWidget",
+      "doubleClickOpened": false,
+      "singleClickUnchanged": false
+    }
+  ],
+  "tooltipEventAccepted": false,
+  "radioConnected": false,
+  "txAllowed": false,
+  "naturalHoverDelayMeasured": false
+}
