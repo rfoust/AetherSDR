@@ -1,0 +1,43 @@
+{
+  "hardware": "FLEX-6700",
+  "firmware": "4.3.16.42034",
+  "license": {
+    "feature": "auto_agc_t",
+    "enabled": true,
+    "reason": "EA"
+  },
+  "before": {
+    "agcThresholdMode": "manual",
+    "agcThreshold": 65
+  },
+  "automatic": {
+    "agcThresholdMode": "auto",
+    "agcThreshold": 65
+  },
+  "manualSlider": {
+    "agcThresholdMode": "manual",
+    "agcThreshold": 64
+  },
+  "restored": {
+    "agcThresholdMode": "manual",
+    "agcThreshold": 65,
+    "automaticAgcThresholdActiveOrPending": false
+  },
+  "transmittingAfter": false,
+  "wire": [
+    "slice 0 agc_threshold_mode=manual",
+    "slice 0 agc_threshold_mode=manual",
+    "license feature name=AUTO_AGC_T enabled=1 reason=EA",
+    "C94|slice set 0 agc_threshold_mode=auto",
+    "slice 0 agc_threshold_mode=auto",
+    "C139|slice set 0 agc_threshold=64",
+    "slice 0 agc_threshold_mode=manual",
+    "C150|slice set 0 agc_threshold=65",
+    "C151|slice set 0 agc_threshold_mode=auto",
+    "slice 0 agc_threshold_mode=manual",
+    "slice 0 agc_threshold_mode=auto",
+    "C161|slice set 0 agc_threshold_mode=manual",
+    "slice 0 agc_threshold_mode=manual"
+  ],
+  "proof": "Live licensed firmware via freshly built ARM64 app and agent automation bridge; no RF transmission"
+}
