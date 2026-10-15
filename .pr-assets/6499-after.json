@@ -1,0 +1,71 @@
+[
+  {
+    "stored": "FDVU",
+    "displayed": "FDVU",
+    "items": [
+      "LSB",
+      "USB",
+      "CW",
+      "CWL",
+      "CWU",
+      "AM",
+      "SAM",
+      "FM",
+      "NFM",
+      "DFM",
+      "DSTR",
+      "DIGL",
+      "DIGU",
+      "RTTY",
+      "FDVU",
+      "FDVL",
+      "FDV"
+    ]
+  },
+  {
+    "stored": "FDVL",
+    "displayed": "FDVL",
+    "items": [
+      "LSB",
+      "USB",
+      "CW",
+      "CWL",
+      "CWU",
+      "AM",
+      "SAM",
+      "FM",
+      "NFM",
+      "DFM",
+      "DSTR",
+      "DIGL",
+      "DIGU",
+      "RTTY",
+      "FDVU",
+      "FDVL",
+      "FDV"
+    ]
+  },
+  {
+    "stored": "FDV",
+    "displayed": "FDV",
+    "items": [
+      "LSB",
+      "USB",
+      "CW",
+      "CWL",
+      "CWU",
+      "AM",
+      "SAM",
+      "FM",
+      "NFM",
+      "DFM",
+      "DSTR",
+      "DIGL",
+      "DIGU",
+      "RTTY",
+      "FDVU",
+      "FDVL",
+      "FDV"
+    ]
+  }
+]

@@ -1,0 +1,65 @@
+[
+  {
+    "stored": "FDVU",
+    "displayed": "FM",
+    "items": [
+      "LSB",
+      "USB",
+      "CW",
+      "CWL",
+      "CWU",
+      "AM",
+      "SAM",
+      "FM",
+      "NFM",
+      "DFM",
+      "DSTR",
+      "DIGL",
+      "DIGU",
+      "RTTY",
+      "FDV"
+    ]
+  },
+  {
+    "stored": "FDVL",
+    "displayed": "FM",
+    "items": [
+      "LSB",
+      "USB",
+      "CW",
+      "CWL",
+      "CWU",
+      "AM",
+      "SAM",
+      "FM",
+      "NFM",
+      "DFM",
+      "DSTR",
+      "DIGL",
+      "DIGU",
+      "RTTY",
+      "FDV"
+    ]
+  },
+  {
+    "stored": "FDV",
+    "displayed": "FDV",
+    "items": [
+      "LSB",
+      "USB",
+      "CW",
+      "CWL",
+      "CWU",
+      "AM",
+      "SAM",
+      "FM",
+      "NFM",
+      "DFM",
+      "DSTR",
+      "DIGL",
+      "DIGU",
+      "RTTY",
+      "FDV"
+    ]
+  }
+]
