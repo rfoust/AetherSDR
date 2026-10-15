@@ -1,0 +1,38 @@
+{
+  "source": "production-path synthetic fixture; no radio/RF",
+  "selection_commands": 0,
+  "after_reset_command": "slice reset 0 dsp_param=all",
+  "before": {
+    "nrLevel": 73,
+    "nbLevel": 61,
+    "apfLevel": 42,
+    "nr": true,
+    "nb": true,
+    "apf": false
+  },
+  "pending": {
+    "nrLevel": 73,
+    "nbLevel": 61,
+    "apfLevel": 42,
+    "nr": true,
+    "nb": true,
+    "apf": false
+  },
+  "after_synthetic_status": {
+    "nrLevel": 50,
+    "nbLevel": 50,
+    "apfLevel": 30,
+    "nr": true,
+    "nb": true,
+    "apf": false
+  },
+  "commands": [
+    "slice reset 0 dsp_param=all",
+    "slice reset 0 dsp_param=nr",
+    "slice reset 0 dsp_param=all"
+  ],
+  "denied_action_refused": true,
+  "disconnected_action_refused": true,
+  "fresh_click_after_reclaim": true,
+  "status_echo_commands": 0
+}
