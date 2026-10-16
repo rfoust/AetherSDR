@@ -1,0 +1,72 @@
+{
+  "fixture": "Production RX and VFO widgets with injected normalized backend status; bridge dispatcher only, no radio, network listener, audio device or transmitter",
+  "codeCommit": "4685ad2c23c89826792661d1b3d78127d4417c4c",
+  "devicePixelRatio": 1.6667,
+  "states": [
+    {
+      "stage": "01-manual-before",
+      "mode": "manual",
+      "threshold": 65,
+      "pending": false,
+      "appletWidth": 248,
+      "sliderWidth": 61,
+      "wireCommands": []
+    },
+    {
+      "stage": "02-automatic-request-pending",
+      "mode": "manual",
+      "threshold": 65,
+      "pending": true,
+      "appletWidth": 248,
+      "sliderWidth": 61,
+      "wireCommands": [
+        "slice set 0 agc_threshold_mode=auto"
+      ]
+    },
+    {
+      "stage": "03-automatic-confirmed",
+      "mode": "auto",
+      "threshold": 41,
+      "pending": true,
+      "appletWidth": 248,
+      "sliderWidth": 61,
+      "wireCommands": [
+        "slice set 0 agc_threshold_mode=auto"
+      ]
+    },
+    {
+      "stage": "04-manual-confirmed",
+      "mode": "manual",
+      "threshold": 52,
+      "pending": false,
+      "appletWidth": 248,
+      "sliderWidth": 61,
+      "wireCommands": [
+        "slice set 0 agc_threshold_mode=auto",
+        "slice set 0 agc_threshold_mode=manual"
+      ]
+    },
+    {
+      "stage": "05-slice-automatic",
+      "mode": "auto",
+      "threshold": 41,
+      "pending": true,
+      "appletWidth": 248,
+      "sliderWidth": 61,
+      "wireCommands": [
+        "slice set 0 agc_threshold_mode=auto"
+      ]
+    },
+    {
+      "stage": "06-slice-manual",
+      "mode": "manual",
+      "threshold": 40,
+      "pending": false,
+      "appletWidth": 248,
+      "sliderWidth": 61,
+      "wireCommands": [
+        "slice set 0 agc_threshold_mode=auto"
+      ]
+    }
+  ]
+}
