@@ -1,0 +1,49 @@
+{
+  "initial-tree": {
+    "checkedBandIds": [],
+    "reportedRows": 16,
+    "existingCheckboxesEnabledAndUnchanged": 128
+  },
+  "40m-only-tree": {
+    "checkedBandIds": [
+      5
+    ],
+    "reportedRows": 16,
+    "existingCheckboxesEnabledAndUnchanged": 128
+  },
+  "both-on-tree": {
+    "checkedBandIds": [
+      5,
+      9
+    ],
+    "reportedRows": 16,
+    "existingCheckboxesEnabledAndUnchanged": 128
+  },
+  "reopened-tree": {
+    "checkedBandIds": [
+      5,
+      9
+    ],
+    "reportedRows": 16,
+    "existingCheckboxesEnabledAndUnchanged": 128
+  },
+  "20m-only-tree": {
+    "checkedBandIds": [
+      9
+    ],
+    "reportedRows": 16,
+    "existingCheckboxesEnabledAndUnchanged": 128
+  },
+  "restored-tree": {
+    "checkedBandIds": [],
+    "reportedRows": 16,
+    "existingCheckboxesEnabledAndUnchanged": 128
+  },
+  "wireBandWrites": [
+    "interlock bandset 5 tune_tx_suppress=1",
+    "interlock bandset 9 tune_tx_suppress=1",
+    "interlock bandset 5 tune_tx_suppress=0",
+    "interlock bandset 9 tune_tx_suppress=0"
+  ],
+  "safety": "all touched values restored; mox/tuning/transmitting false; app stopped; radio lock released"
+}
