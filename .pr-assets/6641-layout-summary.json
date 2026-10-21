@@ -1,0 +1,14 @@
+{
+  "before": {
+    "fixture": "synthetic normalized backend; no radio or transport",
+    "actualAppletWidth": 251,
+    "thresholdWidth": 60,
+    "devicePixelRatio": 1.6667
+  },
+  "after": {
+    "fixture": "synthetic normalized backend; no radio or transport",
+    "actualAppletWidth": 248,
+    "thresholdWidth": 63,
+    "devicePixelRatio": 1.6667
+  }
+}
