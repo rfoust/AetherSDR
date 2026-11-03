@@ -1,0 +1,400 @@
+{
+  "head": "d0ead0a358fa4f3ae046063fb7016352616f01d3",
+  "baseline": "9450f3089012e2c98c9fb361027384e2f827d05d",
+  "physical_radio": {
+    "model": "FLEX-6700",
+    "firmware": "4.3.16.42034",
+    "rx_only": true
+  },
+  "reporter_capture": {
+    "Opus": {
+      "client_packets": 5907,
+      "tunnel_packets_in_matching_span": 5907,
+      "packets_missing_at_client": 0,
+      "reordered_packets": 154,
+      "max_reorder_distance": 3,
+      "client_sequence_breaks": 432,
+      "tunnel_sequence_breaks_full_capture": 0,
+      "radio_sequence_breaks_full_capture": 0,
+      "predicted_plc_packet_units": 1463
+    },
+    "FFT": {
+      "client_packets": 1480,
+      "tunnel_packets_in_matching_span": 1480,
+      "packets_missing_at_client": 0,
+      "reordered_packets": 137,
+      "max_reorder_distance": 2,
+      "client_sequence_breaks": 403,
+      "tunnel_sequence_breaks_full_capture": 0,
+      "radio_sequence_breaks_full_capture": 0,
+      "predicted_plc_packet_units": null
+    },
+    "Waterfall": {
+      "client_packets": 656,
+      "tunnel_packets_in_matching_span": 656,
+      "packets_missing_at_client": 0,
+      "reordered_packets": 9,
+      "max_reorder_distance": 2,
+      "client_sequence_breaks": 26,
+      "tunnel_sequence_breaks_full_capture": 0,
+      "radio_sequence_breaks_full_capture": 0,
+      "predicted_plc_packet_units": null
+    }
+  },
+  "capture_order_replay": [
+    "pcc=0x8005 received=5907 before_errors=432 after_missing=0 after_gaps=0 reordered=154",
+    "pcc=0x8003 received=1480 before_errors=403 after_missing=0 after_gaps=0 reordered=137",
+    "pcc=0x8004 received=656 before_errors=26 after_missing=0 after_gaps=0 reordered=9"
+  ],
+  "focused_tests": {
+    "macos_arm64": {
+      "passed": 9,
+      "total": 9
+    },
+    "linux": {
+      "passed": 9,
+      "total": 9
+    },
+    "windows_msvc": {
+      "passed": 9,
+      "total": 9
+    }
+  },
+  "relay": {
+    "linux_swap": {
+      "0x8004/0x42000000": {
+        "received": 2648,
+        "forwarded": 2648,
+        "dropped": 0,
+        "swaps": 3,
+        "naive_errors": 9,
+        "input_errors": 0
+      },
+      "0x8003/0x40000000": {
+        "received": 2628,
+        "forwarded": 2628,
+        "dropped": 0,
+        "swaps": 4,
+        "naive_errors": 12,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 1545,
+        "forwarded": 1545,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x3e3/0x4000008": {
+        "received": 9922,
+        "forwarded": 9922,
+        "dropped": 0,
+        "swaps": 124,
+        "naive_errors": 372,
+        "input_errors": 0
+      }
+    },
+    "linux_loss": {
+      "0x8004/0x42000000": {
+        "received": 4884,
+        "forwarded": 4857,
+        "dropped": 27,
+        "swaps": 3,
+        "naive_errors": 21,
+        "input_errors": 0
+      },
+      "0x8003/0x40000000": {
+        "received": 4850,
+        "forwarded": 4829,
+        "dropped": 21,
+        "swaps": 4,
+        "naive_errors": 23,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 2853,
+        "forwarded": 2853,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x3e3/0x4000008": {
+        "received": 18418,
+        "forwarded": 18320,
+        "dropped": 98,
+        "swaps": 124,
+        "naive_errors": 415,
+        "input_errors": 0
+      }
+    },
+    "windows_swap": {
+      "0x8003/0x40000000": {
+        "received": 2137,
+        "forwarded": 2137,
+        "dropped": 0,
+        "swaps": 4,
+        "naive_errors": 12,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 1243,
+        "forwarded": 1243,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x8004/0x42000000": {
+        "received": 2152,
+        "forwarded": 2152,
+        "dropped": 0,
+        "swaps": 2,
+        "naive_errors": 6,
+        "input_errors": 0
+      },
+      "0x3e3/0x4000008": {
+        "received": 7826,
+        "forwarded": 7826,
+        "dropped": 0,
+        "swaps": 96,
+        "naive_errors": 288,
+        "input_errors": 0
+      }
+    },
+    "windows_loss": {
+      "0x8003/0x40000000": {
+        "received": 7206,
+        "forwarded": 7159,
+        "dropped": 47,
+        "swaps": 6,
+        "naive_errors": 40,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 4207,
+        "forwarded": 4207,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x8004/0x42000000": {
+        "received": 7256,
+        "forwarded": 7203,
+        "dropped": 53,
+        "swaps": 2,
+        "naive_errors": 29,
+        "input_errors": 0
+      },
+      "0x3e3/0x4000008": {
+        "received": 26997,
+        "forwarded": 26809,
+        "dropped": 188,
+        "swaps": 157,
+        "naive_errors": 554,
+        "input_errors": 0
+      }
+    },
+    "mac_pcm_swap": {
+      "0x8003/0x40000000": {
+        "received": 4170,
+        "forwarded": 4170,
+        "dropped": 0,
+        "swaps": 13,
+        "naive_errors": 39,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 2419,
+        "forwarded": 2419,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x8004/0x42000000": {
+        "received": 4200,
+        "forwarded": 4199,
+        "dropped": 0,
+        "swaps": 4,
+        "naive_errors": 12,
+        "input_errors": 0
+      },
+      "0x3e3/0x4000008": {
+        "received": 15629,
+        "forwarded": 15629,
+        "dropped": 0,
+        "swaps": 194,
+        "naive_errors": 582,
+        "input_errors": 0
+      },
+      "0x123/0x4000009": {
+        "received": 15418,
+        "forwarded": 15418,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      }
+    },
+    "mac_pcm_loss": {
+      "0x8003/0x40000000": {
+        "received": 8878,
+        "forwarded": 8807,
+        "dropped": 71,
+        "swaps": 13,
+        "naive_errors": 70,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 5148,
+        "forwarded": 5148,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x8004/0x42000000": {
+        "received": 8940,
+        "forwarded": 8868,
+        "dropped": 72,
+        "swaps": 4,
+        "naive_errors": 44,
+        "input_errors": 0
+      },
+      "0x3e3/0x4000008": {
+        "received": 33438,
+        "forwarded": 33169,
+        "dropped": 269,
+        "swaps": 195,
+        "naive_errors": 704,
+        "input_errors": 0
+      },
+      "0x123/0x4000009": {
+        "received": 33227,
+        "forwarded": 33227,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      }
+    },
+    "mac_opus_swap": {
+      "0x8004/0x42000000": {
+        "received": 5896,
+        "forwarded": 5896,
+        "dropped": 0,
+        "swaps": 6,
+        "naive_errors": 18,
+        "input_errors": 0
+      },
+      "0x8003/0x40000000": {
+        "received": 5854,
+        "forwarded": 5854,
+        "dropped": 0,
+        "swaps": 10,
+        "naive_errors": 30,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 3324,
+        "forwarded": 3324,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x8005/0x4000008": {
+        "received": 11720,
+        "forwarded": 11719,
+        "dropped": 0,
+        "swaps": 143,
+        "naive_errors": 429,
+        "input_errors": 0
+      },
+      "0x123/0x4000009": {
+        "received": 21780,
+        "forwarded": 21780,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      }
+    },
+    "mac_opus_loss": {
+      "0x8004/0x42000000": {
+        "received": 15168,
+        "forwarded": 15071,
+        "dropped": 97,
+        "swaps": 8,
+        "naive_errors": 66,
+        "input_errors": 0
+      },
+      "0x8003/0x40000000": {
+        "received": 15062,
+        "forwarded": 14972,
+        "dropped": 90,
+        "swaps": 17,
+        "naive_errors": 91,
+        "input_errors": 0
+      },
+      "0x8002/0x700": {
+        "received": 8560,
+        "forwarded": 8560,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      },
+      "0x8005/0x4000008": {
+        "received": 30299,
+        "forwarded": 30112,
+        "dropped": 187,
+        "swaps": 219,
+        "naive_errors": 739,
+        "input_errors": 0
+      },
+      "0x123/0x4000009": {
+        "received": 56615,
+        "forwarded": 56615,
+        "dropped": 0,
+        "swaps": 0,
+        "naive_errors": 0,
+        "input_errors": 0
+      }
+    }
+  },
+  "raw_capture_frame_histograms": {
+    "mac_before": {
+      "128": 541,
+      "256": 14,
+      "1152": 7
+    },
+    "mac_opus_swaps": {
+      "240": 302
+    },
+    "mac_opus_loss": {
+      "240": 785,
+      "480": 4,
+      "1680": 1
+    },
+    "linux_swaps": {
+      "128": 1503
+    },
+    "linux_loss": {
+      "128": 1461,
+      "256": 8,
+      "896": 3
+    },
+    "windows_swaps": {
+      "128": 1488
+    },
+    "windows_loss": {
+      "128": 1451,
+      "256": 7,
+      "896": 3
+    }
+  }
+}
